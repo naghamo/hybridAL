@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Tuple
 
 from torch import nn
+from tqdm import tqdm
 
 from ..config import ExperimentConfig
 from ..pool import DataPool
@@ -135,7 +136,7 @@ class BaseStrategy(ABC):
         self.optimizer.step()
         return loss.item()
 
-    def train_epochs(self, dataloader) -> tuple[float | Any, int | Any]:
+    def train_epochs(self, dataloader) -> Tuple[float, int]:
         """
         Train the model for the configured number of epochs.
 
@@ -149,21 +150,33 @@ class BaseStrategy(ABC):
         total_loss = 0.0
         num_batches = 0
 
-        # Training loop
         for epoch in range(self.epochs):
             epoch_start_time = time.time()
             epoch_loss = 0.0
             epoch_batches = 0
-            for batch in dataloader:
-                epoch_loss += self._train_batch(batch)
+
+            batch_bar = tqdm(
+                dataloader,
+                desc=f"    Epoch {epoch + 1}/{self.epochs}",
+                leave=False,
+                unit="batch",
+                dynamic_ncols=True,
+            )
+            for batch in batch_bar:
+                loss = self._train_batch(batch)
+                epoch_loss += loss
                 epoch_batches += 1
+                batch_bar.set_postfix(loss=f"{epoch_loss / epoch_batches:.4f}")
+
             if self.scheduler is not None:
                 self.scheduler.step()
 
             epoch_time = time.time() - epoch_start_time
             avg_epoch_loss = epoch_loss / epoch_batches if epoch_batches > 0 else 0.0
-            logging.info(
-                f"Epoch {epoch + 1}/{self.epochs} completed in {epoch_time:.2f}s | Avg Loss: {avg_epoch_loss:.4f}")
+            tqdm.write(
+                f"    Epoch {epoch + 1}/{self.epochs}  |  "
+                f"Avg Loss: {avg_epoch_loss:.4f}  |  Time: {epoch_time:.1f}s"
+            )
 
             total_loss += epoch_loss
             num_batches += epoch_batches

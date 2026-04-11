@@ -56,7 +56,7 @@ class NewOnlyStrategy(BaseStrategy):
         pool.add_labeled_samples(new_indices)
 
         labeled_subset = pool.get_subset(new_indices)
-        dataloader = DataLoader(labeled_subset, batch_size=len(new_indices), shuffle=True)
+        dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
 
 
         total_loss, num_batches = self.train_epochs(dataloader)

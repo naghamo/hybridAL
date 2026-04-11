@@ -13,17 +13,43 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import seaborn as sns
+from scipy import stats as scipy_stats
 
 sns.set_theme(style="whitegrid")
 
-dataset_names = {"agnews": "AG News", "imdb": "IMDb", "jigsaw": "Jigsaw"}
-dataset_labels = {"agnews": ["World", "Sports", "Business", "Sci/Tech"],
-                  "imdb": ["Negative", "Positive"],
-                  "jigsaw": ["Clean", "Toxic"]}
-switch_rounds = {"agnews": {42: 10, 43: 10, 44: 10}, "imdb": {42: 12, 43: 9, 44: 11}, "jigsaw": {42: 19, 43: 11,
-                                                                                                 44: 6}}  # The rounds on which the switch was made in the best hybrid configuration
-strategy_names = {"NewOnlyStrategy": "New only", "RetrainStrategy": "Retrain", "FineTuneStrategy": "Fine tuning",
-                  "DeltaF1Strategy": "HybridAL"}
+dataset_names = {
+    "agnews": "AG News",
+    "imdb": "IMDb",
+    "jigsaw": "Jigsaw",
+    "sst2": "SST-2",
+    "tweeteval": "TweetEval",
+    "yahoo_answers": "Yahoo Answers",
+}
+dataset_labels = {
+    "agnews": ["World", "Sports", "Business", "Sci/Tech"],
+    "imdb": ["Negative", "Positive"],
+    "jigsaw": ["Clean", "Toxic"],
+    "sst2": ["Negative", "Positive"],
+    "tweeteval": ["Negative", "Neutral", "Positive"],
+    "yahoo_answers": [
+        "Society & Culture", "Science & Math", "Health", "Education & Reference",
+        "Computers & Internet", "Sports", "Business & Finance",
+        "Entertainment & Music", "Family & Relationships", "Politics & Government"
+    ],
+}
+# Legacy hardcoded switch rounds for old results that predate strategy_metadata tracking
+_legacy_switch_rounds = {
+    "agnews": {42: 10, 43: 10, 44: 10},
+    "imdb": {42: 12, 43: 9, 44: 11},
+    "jigsaw": {42: 19, 43: 11, 44: 6},
+}
+strategy_names = {
+    "NewOnlyStrategy": "New only",
+    "RetrainStrategy": "Retrain",
+    "FineTuneStrategy": "Fine tuning",
+    "DeltaF1Strategy": "HybridAL",
+    "FixedSwitchStrategy": "Fixed Switch",
+}
 dpi = 250  # DPI for saving figures
 figsize = (6, 4)  # Default figure size
 
@@ -72,25 +98,51 @@ def get_experiments_df(main_results_path: str):
 
     df = pd.json_normalize(all_data, sep='_')
 
-    cols_to_keep = ['total_rounds', 'round_val_stats', 'cfg_seed', 'cfg_strategy_class', 'cfg_strategy_kwargs_epsilon',
-                    'cfg_strategy_kwargs_k', 'cfg_strategy_kwargs_validation_fraction', 'cfg_data',
-                    'final_pool_stats_labeled_count',
-                    'final_pool_stats_unlabeled_count', 'final_test_stats_loss', 'final_test_stats_f1_score',
-                    'final_test_stats_accuracy', 'confusion_matrix', 'folder_name']
+    # Core columns always present
+    cols_to_keep = [
+        'total_rounds', 'round_val_stats',
+        'cfg_seed', 'cfg_strategy_class',
+        'cfg_strategy_kwargs_epsilon', 'cfg_strategy_kwargs_k',
+        'cfg_strategy_kwargs_validation_fraction',
+        'cfg_strategy_kwargs_signal',
+        'cfg_data', 'cfg_model_name_or_path', 'cfg_sampler_class',
+        'final_pool_stats_labeled_count', 'final_pool_stats_unlabeled_count',
+        'final_test_stats_loss', 'final_test_stats_f1_score', 'final_test_stats_accuracy',
+        'confusion_matrix', 'folder_name',
+    ]
+    # strategy_metadata columns only present in newer result files
+    for meta_col in ['strategy_metadata_switch_round', 'strategy_metadata_switched']:
+        if meta_col in df.columns:
+            cols_to_keep.append(meta_col)
+
+    # Keep only columns that exist (older results may lack new fields)
+    cols_to_keep = [c for c in cols_to_keep if c in df.columns]
     df = df[cols_to_keep]
-    df.rename(columns={
+
+    rename_map = {
         'cfg_seed': 'seed',
         'cfg_strategy_class': 'strategy',
         'cfg_strategy_kwargs_epsilon': 'epsilon',
         'cfg_strategy_kwargs_k': 'k',
         'cfg_strategy_kwargs_validation_fraction': 'validation_fraction',
+        'cfg_strategy_kwargs_signal': 'signal',
         'cfg_data': 'dataset',
+        'cfg_model_name_or_path': 'model',
+        'cfg_sampler_class': 'sampler',
         'final_test_stats_f1_score': 'test_f1_score',
         'final_test_stats_accuracy': 'test_accuracy',
         'final_test_stats_loss': 'test_loss',
         'final_pool_stats_labeled_count': 'labeled_count',
         'final_pool_stats_unlabeled_count': 'unlabeled_count',
-    }, inplace=True)
+        'strategy_metadata_switch_round': 'switch_round',
+        'strategy_metadata_switched': 'switched',
+    }
+    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+
+    # Ensure switch_round column exists even for old results (NaN)
+    if 'switch_round' not in df.columns:
+        df['switch_round'] = float('nan')
+
     return df
 
 
@@ -429,6 +481,97 @@ def plot_confusion_heatmaps_hybrid(experiments_df: pd.DataFrame, hybrid_hyper: d
         plt.show()
 
 
+def get_significance_table(experiments_df: pd.DataFrame, hybrid_hyper: dict) -> pd.DataFrame:
+    """
+    Compute Welch's t-test between DeltaF1Strategy and every other strategy, per dataset.
+
+    Tests the null hypothesis that DeltaF1Strategy and the baseline have equal mean
+    test F1 scores. Uses Welch's t-test (unequal variance assumed).
+
+    Args:
+        experiments_df (pd.DataFrame): DataFrame from get_experiments_df().
+        hybrid_hyper (dict): Hyperparameters for DeltaF1Strategy
+                            (keys: 'epsilon', 'k', 'validation_fraction').
+
+    Returns:
+        pd.DataFrame: Table with columns: Dataset, Baseline Strategy,
+                      HybridAL mean F1, Baseline mean F1, t-statistic, p-value,
+                      Significant (p<0.05).
+    """
+    rows = []
+
+    for dataset in experiments_df['dataset'].unique():
+        hybrid_df = filter_experiments_df(
+            experiments_df,
+            dataset=dataset,
+            strategy='DeltaF1Strategy',
+            epsilon=hybrid_hyper['epsilon'],
+            k=hybrid_hyper['k'],
+            validation_fraction=hybrid_hyper['validation_fraction'],
+        )
+        hybrid_f1 = hybrid_df['test_f1_score'].dropna().values
+
+        for strategy in experiments_df['strategy'].unique():
+            if strategy == 'DeltaF1Strategy':
+                continue
+            baseline_df = filter_experiments_df(experiments_df, dataset=dataset, strategy=strategy)
+            baseline_f1 = baseline_df['test_f1_score'].dropna().values
+
+            if len(hybrid_f1) < 2 or len(baseline_f1) < 2:
+                continue
+
+            t_stat, p_val = scipy_stats.ttest_ind(hybrid_f1, baseline_f1, equal_var=False)
+            rows.append({
+                'Dataset': dataset_names.get(dataset, dataset),
+                'Baseline Strategy': strategy_names.get(strategy, strategy),
+                'HybridAL mean F1': round(hybrid_f1.mean(), 4),
+                'Baseline mean F1': round(baseline_f1.mean(), 4),
+                'Mean ΔF1': round(hybrid_f1.mean() - baseline_f1.mean(), 4),
+                't-statistic': round(t_stat, 3),
+                'p-value': round(p_val, 4),
+                'Significant (p<0.05)': p_val < 0.05,
+            })
+
+    return pd.DataFrame(rows)
+
+
+def plot_switch_heatmap(experiments_df: pd.DataFrame, save_dir_path: str = None):
+    """
+    Plot a heatmap of average switch rounds across (epsilon, k) configurations.
+
+    Shows at which round DeltaF1Strategy switched from retraining to fine-tuning,
+    averaged across seeds and datasets, for each (epsilon, k) combination.
+    Requires experiment results that include strategy_metadata_switch_round
+    (i.e., results from updated code with switch_round tracking).
+
+    Args:
+        experiments_df (pd.DataFrame): DataFrame from get_experiments_df().
+        save_dir_path (str, optional): Directory to save the plot. If None, only displays.
+    """
+    delta_df = experiments_df[experiments_df['strategy'] == 'DeltaF1Strategy'].copy()
+    delta_df = delta_df.dropna(subset=['switch_round'])
+
+    if delta_df.empty:
+        print("No switch_round data available. Run new experiments with updated code first.")
+        return
+
+    pivot = delta_df.groupby(['epsilon', 'k'])['switch_round'].mean().unstack('k')
+
+    plt.figure(figsize=(8, 5))
+    sns.heatmap(
+        pivot, annot=True, fmt=".1f", cmap="YlOrRd",
+        cbar_kws={"label": "Avg Switch Round"},
+        linewidths=0.5
+    )
+    plt.title("Average Switch Round by Epsilon and k (DeltaF1Strategy)")
+    plt.xlabel(r"$k$")
+    plt.ylabel(r"$\varepsilon$")
+    plt.tight_layout()
+    if save_dir_path:
+        plt.savefig(os.path.join(save_dir_path, "switch_round_heatmap.png"), dpi=dpi)
+    plt.show()
+
+
 def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dict, save_dir_path: str = None):
     """
     Plots 3 plots of test set F1 score vs round number for HybridAL. There's a plot per dataset, and in each plot there is a line per seed. The round that the switch happened is marked.
@@ -462,12 +605,19 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
             label = f"Seed {j}"
             color = cmap.colors[color_i]
             color_i += 1
-            switch_round = switch_rounds[dataset][j]
+
+            # Prefer switch_round from experiment data; fall back to legacy hardcoded dict
+            switch_round_val = info['switch_round'].values[0] if 'switch_round' in info.columns else None
+            if switch_round_val is None or (isinstance(switch_round_val, float) and np.isnan(switch_round_val)):
+                switch_round_val = _legacy_switch_rounds.get(dataset, {}).get(j, None)
+
             total_rounds.append(info['total_rounds'].values[0])
 
             plt.plot(range(1, len(f1_scores) + 1), f1_scores, label=label, color=color)
-            plt.scatter(switch_round, f1_scores[switch_round - 1], color=color, s=50, edgecolor='black', zorder=5,
-                        label=f"Switch Round (Seed {j})")
+            if switch_round_val is not None:
+                switch_round_val = int(switch_round_val)
+                plt.scatter(switch_round_val, f1_scores[switch_round_val - 1], color=color, s=50,
+                            edgecolor='black', zorder=5, label=f"Switch Round (Seed {j})")
 
         plt.xlabel('Round Number')
         plt.ylabel('Validation Set Macro-F1 Score')
@@ -478,3 +628,191 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
         if save_dir_path is not None:
             plt.savefig(os.path.join(save_dir_path, f'f1_vs_round_hybrid_{dataset}.png'), dpi=dpi)
         plt.show()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LaTeX table generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STRATEGY_ORDER   = ['RetrainStrategy', 'FineTuneStrategy', 'DeltaF1Strategy', 'NewOnlyStrategy']
+_STRATEGY_DISPLAY = {
+    'RetrainStrategy':     'Retrain',
+    'FineTuneStrategy':    'Fine-tune',
+    'DeltaF1Strategy':     'HybridAL',
+    'NewOnlyStrategy':     'New Only',
+    'FixedSwitchStrategy': 'Fixed Switch',
+}
+
+
+def _cell_stats(series_f1, series_acc, round_val_stats_series):
+    """Return (f1_mean, f1_std, acc_mean, acc_std, time_mean, time_std)."""
+    f1_mean  = series_f1.mean()  * 100
+    f1_std   = series_f1.std()   * 100
+    acc_mean = series_acc.mean() * 100
+    acc_std  = series_acc.std()  * 100
+    times = []
+    for rvs in round_val_stats_series:
+        if isinstance(rvs, list):
+            times.append(sum(r['training_time'] for r in rvs))
+    time_mean = np.mean(times) if times else 0.0
+    time_std  = np.std(times)  if times else 0.0
+    return f1_mean, f1_std, acc_mean, acc_std, time_mean, time_std
+
+
+def generate_latex_table(experiments_df: pd.DataFrame,
+                         hybrid_hyper: dict,
+                         table_mode: str = 'main',
+                         caption: str = None,
+                         label: str = None,
+                         output_path: str = None) -> str:
+    """
+    Generate a LaTeX results table from experiment data.
+
+    Matches the paper style: thick borders, dataset-grouped rows, mean±std cells,
+    and a dagger (†) on HybridAL rows where Welch's t-test gives p<0.05 vs all baselines.
+
+    Required LaTeX packages:
+        \\usepackage{booktabs, makecell, multirow, adjustbox, float}
+
+    Args:
+        experiments_df: Combined DataFrame from one or more get_experiments_df() calls.
+        hybrid_hyper:   {'epsilon': ..., 'k': ..., 'validation_fraction': ...}
+        table_mode:     'main' | 'backbones' | 'samplers' | 'fixed_switch' | 'signal'
+        caption:        Custom caption (None = auto).
+        label:          Custom \\label (None = auto).
+        output_path:    If set, write .tex to this path.
+
+    Returns:
+        str: Full LaTeX table source.
+    """
+    from pathlib import Path as _Path
+
+    group_col   = 'dataset' if table_mode in ('main', 'fixed_switch', 'signal') else \
+                  'model'   if table_mode == 'backbones' else 'sampler'
+    group_names = dataset_names if group_col == 'dataset' else {}
+
+    # ── significance: HybridAL vs each baseline per group ───────────────── #
+    sig = {}
+    for gv in experiments_df[group_col].dropna().unique():
+        gdf  = experiments_df[experiments_df[group_col] == gv]
+        hyb  = filter_experiments_df(gdf, strategy='DeltaF1Strategy',
+                                     epsilon=hybrid_hyper.get('epsilon'),
+                                     k=hybrid_hyper.get('k'),
+                                     validation_fraction=hybrid_hyper.get('validation_fraction'))
+        hf1  = hyb['test_f1_score'].dropna().values
+        for s in _STRATEGY_ORDER:
+            if s == 'DeltaF1Strategy':
+                continue
+            bf1 = filter_experiments_df(gdf, strategy=s)['test_f1_score'].dropna().values
+            if len(hf1) >= 2 and len(bf1) >= 2:
+                _, p = scipy_stats.ttest_ind(hf1, bf1, equal_var=False)
+                sig[(gv, s)] = (p < 0.05 and hf1.mean() > bf1.mean())
+
+    # ── row builder ──────────────────────────────────────────────────────── #
+    def make_row(strat_key, display, rdf, is_first, n, rounds_val, add_cline):
+        if rdf.empty:
+            return []
+        f1m,f1s,am,as_,tm,ts = _cell_stats(
+            rdf['test_f1_score'], rdf['test_accuracy'], rdf['round_val_stats'])
+        marker = ''
+        if strat_key == 'DeltaF1Strategy':
+            gv = rdf[group_col].iloc[0]
+            if any(sig.get((gv, s), False)
+                   for s in _STRATEGY_ORDER if s != 'DeltaF1Strategy'):
+                marker = r'$^\dagger$'
+        f1c   = rf'{f1m:.2f}\% $\pm$ {f1s:.2f}\%{marker}'
+        acc_c = rf'{am:.2f}\% $\pm$ {as_:.2f}\%'
+        tc    = rf'{tm:.2f} $\pm$ {ts:.2f}'
+        out   = []
+        if is_first:
+            rc = rf'\multirow{{{n}}}{{*}}{{\centering {rounds_val}}}'
+            out.append(rf'\textbf{{{display}}} & {f1c} & {acc_c} & {tc} & {rc} \\')
+        else:
+            out.append(rf'\textbf{{{display}}} & {f1c} & {acc_c} & {tc} & \\')
+        if add_cline:
+            out.append(r'\cline{1-4}')
+        return out
+
+    # ── body ─────────────────────────────────────────────────────────────── #
+    body  = []
+    groups = sorted(experiments_df[group_col].dropna().unique())
+    for g_idx, gv in enumerate(groups):
+        gdf = experiments_df[experiments_df[group_col] == gv]
+        gvd = group_names.get(gv, str(gv))
+        body.append(r'\Xhline{2\arrayrulewidth}' if g_idx == 0 else r'\Xhline{3\arrayrulewidth}')
+        body.append(rf'\multicolumn{{5}}{{!{{\vrule width 1.2pt}}c!{{\vrule width 1.2pt}}}}{{\emph{{{gvd}}}}} \\')
+        body.append(r'\hline')
+
+        rounds_val = int(round(gdf['total_rounds'].mean())) if 'total_rounds' in gdf.columns else '—'
+
+        if table_mode == 'signal':
+            signals = ['delta_f1','delta_loss','delta_accuracy','gradient_norm']
+            sdisplay = {'delta_f1': r'HybridAL ($\Delta$F1)',
+                        'delta_loss': r'HybridAL ($\Delta$Loss)',
+                        'delta_accuracy': r'HybridAL ($\Delta$Acc)',
+                        'gradient_norm': r'HybridAL (Grad Norm)'}
+            present = [s for s in signals if 'signal' in gdf.columns and s in gdf['signal'].values]
+            for i, sn in enumerate(present):
+                sub = gdf[gdf['signal'] == sn]
+                body += make_row('DeltaF1Strategy', sdisplay.get(sn, sn),
+                                 sub, i == 0, len(present), rounds_val, i < len(present)-1)
+
+        elif table_mode == 'fixed_switch':
+            sr_col = 'cfg_strategy_kwargs_switch_round'
+            srs = sorted(gdf[sr_col].dropna().unique()) if sr_col in gdf.columns else []
+            for i, sr in enumerate(srs):
+                sub = gdf[gdf[sr_col] == sr]
+                body += make_row('FixedSwitchStrategy', f'Fixed-r{int(sr)}',
+                                 sub, i == 0, len(srs), rounds_val, i < len(srs)-1)
+
+        else:
+            present = [s for s in _STRATEGY_ORDER if s in gdf['strategy'].values]
+            for i, strat in enumerate(present):
+                sub = gdf[gdf['strategy'] == strat]
+                if strat == 'DeltaF1Strategy':
+                    sub = filter_experiments_df(sub,
+                                                epsilon=hybrid_hyper.get('epsilon'),
+                                                k=hybrid_hyper.get('k'),
+                                                validation_fraction=hybrid_hyper.get('validation_fraction'))
+                body += make_row(strat, _STRATEGY_DISPLAY.get(strat, strat),
+                                 sub, i == 0, len(present), rounds_val, i < len(present)-1)
+
+    # ── captions & labels ────────────────────────────────────────────────── #
+    _caps = {
+        'main':
+            r"Macro-F1, accuracy, training time, and rounds across strategies and datasets "
+            r"(mean $\pm$ std). $^\dagger$~HybridAL is significantly better than all baselines "
+            r"(Welch's $t$-test, $p<0.05$).",
+        'backbones':    r'Backbone ablation. Same format as Table~\ref{tab:exp_summary}.',
+        'samplers':     r'Sampler ablation. Same format as Table~\ref{tab:exp_summary}.',
+        'fixed_switch': r'Fixed-switch baselines: switching at a predetermined round vs adaptive HybridAL.',
+        'signal':       r'Switching-signal ablation: replacing $\Delta$F1 with other signals (fixed best hyperparameters).',
+    }
+    _labels = {'main':'tab:exp_summary','backbones':'tab:backbones',
+               'samplers':'tab:samplers','fixed_switch':'tab:fixed_switch','signal':'tab:signal_ablation'}
+    cap = caption or _caps.get(table_mode, '')
+    lbl = label   or _labels.get(table_mode, 'tab:results')
+
+    lines = [
+        r'\begin{table}[H]', r'\centering', r'\footnotesize',
+        r'\setlength{\tabcolsep}{6pt}', r'\renewcommand{\arraystretch}{1.32}',
+        r'\begin{adjustbox}{width=\columnwidth}',
+        r'\begin{tabular}{!{\vrule width 1.2pt}l|c|c|c|c!{\vrule width 1.2pt}}',
+        r'\hline',
+        r'\textbf{Strategy} & \textbf{Macro-F1} & \textbf{Accuracy} & '
+        r'\textbf{Training time (s.)} & \textbf{N. rounds} \\',
+        r'\hline', '',
+    ] + body + [
+        '', r'\Xhline{3\arrayrulewidth}',
+        r'\end{tabular}', r'\end{adjustbox}',
+        rf'\caption{{{cap}}}', rf'\label{{{lbl}}}',
+        r'\end{table}',
+    ]
+    latex = '\n'.join(lines)
+
+    if output_path:
+        _Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            f.write(latex)
+
+    return latex

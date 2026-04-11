@@ -23,6 +23,8 @@ import torch.nn as nn
 import torch.optim as optim
 
 import logging
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from .config import ExperimentConfig
 from .pool import DataPool
@@ -31,7 +33,7 @@ import adaptive_al.strategies as strategies
 import adaptive_al.samplers as samplers
 
 # Used in data loading eval string
-from .utils.data_loader import load_agnews, load_imdb, load_jigsaw
+from .utils.data_loader import load_agnews, load_imdb, load_jigsaw, load_sst2, load_tweeteval, load_yahoo_answers
 
 from .evaluation import evaluate_model, compute_confusion_matrix
 
@@ -72,16 +74,24 @@ class ActiveLearning:
 
     def _initialize_model_and_tokenizer(self):
         """Loads the model and tokenizer from Hugging Face."""
-        logging.info(f"Loading tokenizer and model from '{self.cfg.model_name_or_path}'...")
+        tqdm.write(f"  [Init] Loading model: {self.cfg.model_name_or_path}")
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model_name_or_path)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.cfg.model_name_or_path,
             num_labels=self.cfg.num_labels
         )
+        tqdm.write(f"  [Init] Model loaded  ({self.cfg.num_labels} labels, device={self.cfg.device})")
 
     def _initialize_data(self):
         """Initialize datasets"""
+        tqdm.write(f"  [Init] Loading dataset: {self.cfg.data}")
         self.train_dataset, self.val_dataset, self.test_dataset = self._load_data()
+        tqdm.write(
+            f"  [Init] Dataset ready  "
+            f"train={len(self.train_dataset):,}  "
+            f"val={len(self.val_dataset):,}  "
+            f"test={len(self.test_dataset):,}"
+        )
         logging.info(
             f"Train size: {len(self.train_dataset)}, Validation size: {len(self.val_dataset)}, Test size: {len(self.test_dataset)}")
 
@@ -92,10 +102,26 @@ class ActiveLearning:
         Creates a DataPool object with a random subset of training data
         based on cfg.initial_pool_size.
         """
-        # Initialize pool with random samples
-        all_indices = list(range(len(self.train_dataset)))
-        initial_indices = random.sample(all_indices, self.cfg.initial_pool_size)
+        # Initialize pool with stratified random samples (equal class representation)
+        from collections import defaultdict
+        class_to_indices = defaultdict(list)
+        for i, label in enumerate(self.train_dataset.labels):
+            class_to_indices[int(label)].append(i)
+        n_classes = len(class_to_indices)
+        per_class = self.cfg.initial_pool_size // n_classes
+        initial_indices = []
+        for cls_indices in class_to_indices.values():
+            initial_indices.extend(random.sample(cls_indices, min(per_class, len(cls_indices))))
+        # Top up to exact initial_pool_size if rounding left us short
+        remaining = self.cfg.initial_pool_size - len(initial_indices)
+        if remaining > 0:
+            leftover = [i for i in range(len(self.train_dataset)) if i not in set(initial_indices)]
+            initial_indices.extend(random.sample(leftover, remaining))
         self.pool = DataPool(self.train_dataset, self.val_dataset, self.test_dataset, initial_indices)
+        tqdm.write(
+            f"  [Init] Pool created   labeled={self.cfg.initial_pool_size}  "
+            f"unlabeled={len(self.train_dataset) - self.cfg.initial_pool_size:,}"
+        )
 
     def _initialize_classes(self):
         """
@@ -204,10 +230,24 @@ class ActiveLearning:
         Returns:
             Dictionary with round statistics
         """
-        logging.info(f"\n--- Round {self.current_round + 1}")
+        round_num   = self.current_round + 1
+        pool_stats  = self.pool.get_pool_stats()
+        labeled_n   = pool_stats.get("labeled_count", 0)
+        unlabeled_n = pool_stats.get("unlabeled_count", 0)
+        total_n     = labeled_n + unlabeled_n
+        pct_labeled = 100 * labeled_n / total_n if total_n > 0 else 0
+        new_n       = len(new_indices) if new_indices else 0
+        prev_f1     = self.last_stats["f1_score"]
 
-        if new_indices is not None and len(new_indices) > 0:
-            logging.info(f"Training with {len(new_indices)} new samples")
+        mode_str = self._current_mode_str()
+
+        tqdm.write(
+            f"\n{'─'*60}\n"
+            f"  Round {round_num}  |  {mode_str}\n"
+            f"  Pool  : {labeled_n:,} labeled ({pct_labeled:.1f}% of {total_n:,})  "
+            f"|  {unlabeled_n:,} unlabeled  |  +{new_n} new this round\n"
+            f"{'─'*60}"
+        )
 
         # Train model (timing handled in base class)
         training_stats = self.strategy.train(self.pool, new_indices)
@@ -219,6 +259,10 @@ class ActiveLearning:
         # Keep in memory last performance
         self._update_last_stats(val_stats)
 
+        delta_f1 = val_stats['f1_score'] - prev_f1
+        delta_str = f"{delta_f1:+.4f}" if prev_f1 > 0 else "  —   "
+        trend     = "▲" if delta_f1 > 0.001 else ("▼" if delta_f1 < -0.001 else "▶")
+
         round_stats = {
             **training_stats,
             **val_stats,
@@ -226,9 +270,13 @@ class ActiveLearning:
         }
 
         self.round_stats.append(round_stats)
-        logging.info(
-            f"Round {self.current_round + 1} complete. Val Stats: Loss={val_stats['loss']}, F1={val_stats['f1_score']}, "
-            f"Time={training_stats['training_time']:.2f}s")
+        tqdm.write(
+            f"  {trend} Val F1: {val_stats['f1_score']:.4f} ({delta_str})  |  "
+            f"Acc: {val_stats['accuracy']:.4f}  |  "
+            f"Loss: {val_stats['loss']:.4f}  |  "
+            f"Time: {training_stats['training_time']:.1f}s  |  "
+            f"Samples trained: {training_stats.get('total_samples', '?'):,}"
+        )
 
         self.current_round += 1
         return round_stats
@@ -256,16 +304,22 @@ class ActiveLearning:
             logging.warning("No unlabeled data remaining!")
             return []
 
+        sampler_name = type(self.sampler).__name__
+        pool_stats   = self.pool.get_pool_stats()
+        unlabeled_n  = pool_stats.get("unlabeled_count", 0)
+        tqdm.write(
+            f"  [Sample] {sampler_name} selecting {self.cfg.acquisition_batch_size} "
+            f"from {unlabeled_n:,} unlabeled samples..."
+        )
+
         start = time.perf_counter()
 
         valid_params = inspect.signature(self.sampler.select).parameters
         sampler_kwargs = {k: v for k, v in self.strategy.pass_args_to_sampler().items() if k in valid_params}
         selected_indices = self.sampler.select(self.pool, self.cfg.acquisition_batch_size, **sampler_kwargs)
 
-        # Letting the strategy decide what to do with it
-        # self.pool.add_labeled_samples(selected_indices)
-
-        logging.info(f"Sampled {len(selected_indices)} new samples in {round(time.perf_counter() - start, 2)} seconds, using {type(self.sampler).__name__}")
+        elapsed = round(time.perf_counter() - start, 2)
+        tqdm.write(f"  [Sample] {len(selected_indices)} samples selected in {elapsed}s")
         return selected_indices
 
     def calculate_total_rounds(self):
@@ -313,32 +367,83 @@ class ActiveLearning:
         """
         self._initialize()
         total_rounds = self.calculate_total_rounds()
-
-        if total_rounds == -1:
+        unlimited = (total_rounds == -1)
+        if unlimited:
             total_rounds = float('inf')
-            logging.info(f"Running rounds until we all available data is used.")
-        else:
-            logging.info(f"Running {total_rounds} rounds.")
 
-        new_indices = []
-        if total_rounds > 0:
-            self.train_one_round(None)
-            new_indices = self.sample_next_batch()
+        tqdm.write(
+            f"\n{'='*60}\n"
+            f"  Experiment: {self.cfg.experiment_name}\n"
+            f"  Dataset:  {self.cfg.data:<20}  Seed: {self.cfg.seed}\n"
+            f"  Strategy: {self.cfg.strategy_class:<20}  Sampler: {self.cfg.sampler_class}\n"
+            f"  Model:    {self.cfg.model_name_or_path}\n"
+            f"  Rounds:   {'unlimited' if unlimited else total_rounds}  "
+            f"Batch: {self.cfg.acquisition_batch_size}  Epochs/round: {self.cfg.epochs}\n"
+            f"{'='*60}"
+        )
 
-        while new_indices and self.current_round < total_rounds and not self.has_plateaued() and not self._timedout():
-            self.train_one_round(new_indices)
-            new_indices = self.sample_next_batch()
+        round_bar = tqdm(
+            total=None if unlimited else int(total_rounds),
+            desc="  Rounds",
+            unit="round",
+            dynamic_ncols=True,
+            position=0,
+        )
+
+        with logging_redirect_tqdm():
+            new_indices = []
+            if total_rounds > 0:
+                self.train_one_round(None)
+                round_bar.update(1)
+                round_bar.set_postfix(**self._round_postfix())
+                new_indices = self.sample_next_batch()
+
+            while new_indices and self.current_round < total_rounds and not self.has_plateaued() and not self._timedout():
+                self.train_one_round(new_indices)
+                round_bar.update(1)
+                round_bar.set_postfix(**self._round_postfix())
+                new_indices = self.sample_next_batch()
+
+        round_bar.close()
 
         if self.current_round != total_rounds:
-            logging.info(f"\n--- Stopped earlier at round {self.current_round}.")
+            tqdm.write(f"\n  Stopped at round {self.current_round} (early stopping / timeout / no unlabeled data)")
 
+        tqdm.write(f"\n  [Eval] Running final evaluation on test set...")
         metrics = evaluate_model(self.model, self.strategy.criterion, self.cfg.batch_size, dataset=self.test_dataset,
                                  device=self.cfg.device)
         self.final_test_stats = metrics
         self.confusion_matrix = compute_confusion_matrix(self.model, self.test_dataset, self.cfg.batch_size)
-        logging.info(
-            f"Final Test set evaluation: Loss={metrics['loss']}, F1={metrics['f1_score']:.4f}, Acc={metrics['accuracy']:.4f}")
+        tqdm.write(
+            f"  [Eval] Test F1: {metrics['f1_score']:.4f}  |  "
+            f"Test Acc: {metrics['accuracy']:.4f}  |  "
+            f"Test Loss: {metrics['loss']:.4f}\n"
+        )
         return metrics
+
+    def _current_mode_str(self) -> str:
+        """Return a human-readable description of the current training mode."""
+        s = self.strategy
+        strategy_name = type(s).__name__
+        if strategy_name == "DeltaF1Strategy":
+            if s.switched:
+                return f"HybridAL  [FineTune — switched at round {s.switch_round}]"
+            signal_label = {"delta_f1": "ΔF1", "delta_loss": "ΔLoss",
+                            "delta_accuracy": "ΔAcc", "gradient_norm": "GradNorm"}.get(s.signal, s.signal)
+            return f"HybridAL  [Retrain, monitoring {signal_label}, count={s.count}/{s.k}]"
+        if strategy_name == "FixedSwitchStrategy":
+            mode = "FineTune" if s.switched else "Retrain"
+            return f"FixedSwitch-r{s.switch_round}  [{mode}]"
+        return strategy_name
+
+    def _round_postfix(self) -> dict:
+        """Return tqdm postfix dict for the round bar."""
+        last = self.round_stats[-1] if self.round_stats else {}
+        return {
+            "F1": f"{last.get('f1_score', 0):.4f}",
+            "loss": f"{last.get('loss', 0):.4f}",
+            "labeled": self.pool.get_pool_stats().get("labeled_count", 0),
+        }
 
     def has_plateaued(self):
         """
@@ -374,10 +479,17 @@ class ActiveLearning:
 
     def get_experiment_summary(self) -> Dict[str, Any]:
         """Get summary of all rounds."""
+        strategy_metadata = {}
+        if hasattr(self.strategy, 'switched'):
+            strategy_metadata['switched'] = self.strategy.switched
+        if hasattr(self.strategy, 'switch_round'):
+            strategy_metadata['switch_round'] = self.strategy.switch_round
+
         return {
             "cfg": self.cfg.__dict__,  # Already fully serializable
             "total_rounds": len(self.round_stats),
             "round_val_stats": self.round_stats,
+            "strategy_metadata": strategy_metadata,
             "final_pool_stats": self.pool.get_pool_stats(),
             "final_test_stats": self.final_test_stats,
             "confusion_matrix": self.confusion_matrix

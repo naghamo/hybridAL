@@ -158,3 +158,193 @@ def load_jigsaw(path="../data", val_size=0.01, test_size=0.2, seed=42, model_nam
 
     return (train_dataset, val_dataset, test_dataset), (df_train, df_val,
                                                         df_test)  # return both tokenized and original dfs
+
+
+def load_sst2(path=None, val_size=0.01, seed=42, model_name_or_path="bert-base-uncased",
+              tokenizer_kwargs=None):
+    """
+    Load and preprocess the SST-2 binary sentiment classification dataset from GLUE.
+
+    Downloads via HuggingFace datasets library. The canonical GLUE validation split
+    (which has real labels) is used as the test set. The training set is split into
+    train and validation.
+
+    Args:
+        path (str): Unused. Accepted for API compatibility with the eval()-based loader.
+        val_size (float): Fraction of training data to use as validation (default: 0.01).
+        seed (int): Random seed for reproducibility (default: 42).
+        model_name_or_path (str): Pretrained model name or path for tokenizer.
+        tokenizer_kwargs (dict): Additional arguments for the tokenizer.
+
+    Returns:
+        tuple: Two tuples containing:
+            - (train_dataset, val_dataset, test_dataset): Tokenized TextClassificationDataset objects.
+            - (df_train, df_val, df_test): Raw DataFrames with 'text' and 'label' columns.
+    """
+    from datasets import load_dataset
+
+    raw = load_dataset("glue", "sst2")
+
+    df_trainval = pd.DataFrame({
+        "text": raw["train"]["sentence"],
+        "label": raw["train"]["label"]
+    })
+    df_test = pd.DataFrame({
+        "text": raw["validation"]["sentence"],
+        "label": raw["validation"]["label"]
+    })
+
+    df_train, df_val = train_test_split(
+        df_trainval, test_size=val_size,
+        stratify=df_trainval["label"], random_state=seed
+    )
+
+    train_dataset, val_dataset, test_dataset = tokenize(
+        [df_train.reset_index(drop=True),
+         df_val.reset_index(drop=True),
+         df_test.reset_index(drop=True)],
+        model_name_or_path, tokenizer_kwargs or {}
+    )
+
+    return (train_dataset, val_dataset, test_dataset), (
+        df_train.reset_index(drop=True),
+        df_val.reset_index(drop=True),
+        df_test.reset_index(drop=True)
+    )
+
+
+def load_tweeteval(path=None, val_size=0.01, seed=42, model_name_or_path="bert-base-uncased",
+                   tokenizer_kwargs=None):
+    """
+    Load and preprocess the TweetEval sentiment dataset (3-class).
+
+    Downloads via HuggingFace datasets library. Uses the canonical test split.
+    The canonical validation set is merged into training to maximize the
+    unlabeled pool for active learning, then a small stratified val is extracted.
+
+    Labels: 0=negative, 1=neutral, 2=positive.
+
+    Args:
+        path (str): Unused. Accepted for API compatibility with the eval()-based loader.
+        val_size (float): Fraction of training data to use as validation (default: 0.01).
+        seed (int): Random seed for reproducibility (default: 42).
+        model_name_or_path (str): Pretrained model name or path for tokenizer.
+        tokenizer_kwargs (dict): Additional arguments for the tokenizer.
+
+    Returns:
+        tuple: Two tuples containing:
+            - (train_dataset, val_dataset, test_dataset): Tokenized TextClassificationDataset objects.
+            - (df_train, df_val, df_test): Raw DataFrames with 'text' and 'label' columns.
+    """
+    from datasets import load_dataset
+
+    raw = load_dataset("tweet_eval", "sentiment")
+
+    # Merge canonical train + validation to maximize the unlabeled pool
+    df_all_train = pd.concat([
+        pd.DataFrame({"text": raw["train"]["text"], "label": raw["train"]["label"]}),
+        pd.DataFrame({"text": raw["validation"]["text"], "label": raw["validation"]["label"]})
+    ], ignore_index=True)
+
+    df_test = pd.DataFrame({
+        "text": raw["test"]["text"],
+        "label": raw["test"]["label"]
+    })
+
+    df_train, df_val = train_test_split(
+        df_all_train, test_size=val_size,
+        stratify=df_all_train["label"], random_state=seed
+    )
+
+    train_dataset, val_dataset, test_dataset = tokenize(
+        [df_train.reset_index(drop=True),
+         df_val.reset_index(drop=True),
+         df_test.reset_index(drop=True)],
+        model_name_or_path, tokenizer_kwargs or {}
+    )
+
+    return (train_dataset, val_dataset, test_dataset), (
+        df_train.reset_index(drop=True),
+        df_val.reset_index(drop=True),
+        df_test.reset_index(drop=True)
+    )
+
+
+def load_yahoo_answers(path=None, val_size=0.01, seed=42, subsample=50000,
+                       model_name_or_path="bert-base-uncased", tokenizer_kwargs=None):
+    """
+    Load and preprocess the Yahoo Answers Topics dataset (10-class).
+
+    Downloads via HuggingFace datasets library. The full training set (1.4M samples)
+    is subsampled to `subsample` examples with class stratification to keep compute
+    tractable. The test set is capped at 10K samples.
+
+    Labels: 0–9 corresponding to Yahoo Answers topic categories.
+
+    Args:
+        path (str): Unused. Accepted for API compatibility with the eval()-based loader.
+        val_size (float): Fraction of subsampled training data for validation (default: 0.01).
+        seed (int): Random seed for reproducibility (default: 42).
+        subsample (int): Maximum training set size after stratified subsampling (default: 50000).
+        model_name_or_path (str): Pretrained model name or path for tokenizer.
+        tokenizer_kwargs (dict): Additional arguments for the tokenizer.
+
+    Returns:
+        tuple: Two tuples containing:
+            - (train_dataset, val_dataset, test_dataset): Tokenized TextClassificationDataset objects.
+            - (df_train, df_val, df_test): Raw DataFrames with 'text' and 'label' columns.
+    """
+    from datasets import load_dataset
+
+    raw = load_dataset("yahoo_answers_topics")
+
+    df_train_full = pd.DataFrame({
+        "text": [
+            f"{q} {a}" for q, a in zip(
+                raw["train"]["question_title"],
+                raw["train"]["best_answer"]
+            )
+        ],
+        "label": raw["train"]["topic"]
+    })
+    df_test_full = pd.DataFrame({
+        "text": [
+            f"{q} {a}" for q, a in zip(
+                raw["test"]["question_title"],
+                raw["test"]["best_answer"]
+            )
+        ],
+        "label": raw["test"]["topic"]
+    })
+
+    # Stratified subsample of training set
+    actual_subsample = min(subsample, len(df_train_full))
+    df_train_sub, _ = train_test_split(
+        df_train_full, train_size=actual_subsample,
+        stratify=df_train_full["label"], random_state=seed
+    )
+
+    df_train, df_val = train_test_split(
+        df_train_sub, test_size=val_size,
+        stratify=df_train_sub["label"], random_state=seed
+    )
+
+    # Cap test set at 10K for tractable evaluation
+    test_cap = min(10000, len(df_test_full))
+    df_test, _ = train_test_split(
+        df_test_full, train_size=test_cap,
+        stratify=df_test_full["label"], random_state=seed
+    )
+
+    train_dataset, val_dataset, test_dataset = tokenize(
+        [df_train.reset_index(drop=True),
+         df_val.reset_index(drop=True),
+         df_test.reset_index(drop=True)],
+        model_name_or_path, tokenizer_kwargs or {}
+    )
+
+    return (train_dataset, val_dataset, test_dataset), (
+        df_train.reset_index(drop=True),
+        df_val.reset_index(drop=True),
+        df_test.reset_index(drop=True)
+    )

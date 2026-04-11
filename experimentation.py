@@ -1,19 +1,42 @@
 """
 Hyperparameter optimization and experiment runner for active learning strategies.
 
-This script runs active learning experiments across multiple datasets, seeds, and
-strategies. For DeltaF1Strategy, it uses Optuna to optimize hyperparameters.
-For other strategies, it runs experiments directly.
+Each experiment phase has a named --mode that sets sensible defaults.
+Any flag can override the mode defaults. Use --dry-run to preview what will run.
 
-Usage:
-    # Run with defaults
-    python experimentation.py
+RECOMMENDED WORKFLOW
+====================
 
-    # Override specific parameters
-    python experimentation.py --datasets agnews --epochs 10 --learning-rate 3e-5
+Step 1 — Baselines (no Optuna, can run immediately):
+    python experimentation.py --mode baselines
 
-    # See all options
-    python experimentation.py --help
+Step 2 — Primary HybridAL (Optuna on DistilBERT + EntropyOnRandomSubsetSampler):
+    python experimentation.py --mode hybrid
+
+Step 3 — Backbone ablation (BERT + RoBERTa):
+    python experimentation.py --mode backbones
+
+Step 4 — Sampler ablation (Random + BADGE):
+    python experimentation.py --mode samplers
+
+Step 5 — New datasets (SST-2, TweetEval, Yahoo Answers):
+    python experimentation.py --mode new_datasets
+
+Step 6 — Fixed-switch baselines:
+    python experimentation.py --mode fixed_switch
+
+Step 7 — Signal ablation (after Step 2, fill in best hyperparams):
+    python experimentation.py --mode signal_ablation \\
+        --best-epsilon 0.01 --best-k 4 --best-validation-fraction 0.1
+
+Quick smoke test (fast, ~5 rounds each):
+    python experimentation.py --mode quick
+
+Everything at once:
+    python experimentation.py --mode full
+
+Dry-run to preview without running:
+    python experimentation.py --mode baselines --dry-run
 """
 
 import itertools
@@ -26,248 +49,564 @@ import logging
 import optuna
 
 from adaptive_al.active_learning import ActiveLearning, ExperimentConfig
+
 HOURS = 3600
 
-def objective(trial, strategy, data_sets, seeds, common_config_parameters, data_sets_num_labels, start_time=0):
-    """
-    Objective function for Optuna hyperparameter optimization.
+# --------------------------------------------------------------------------- #
+# Dataset registry                                                              #
+# --------------------------------------------------------------------------- #
+DATASET_NUM_LABELS = {
+    "agnews":        4,
+    "imdb":          2,
+    "jigsaw":        2,
+    "sst2":          2,
+    "tweeteval":     3,
+    "yahoo_answers": 10,
+}
 
-    Args:
-        trial (optuna.trial.Trial): Current Optuna trial object.
-        strategy (str): Active learning strategy name.
-        data_sets (list): List of dataset names to evaluate on.
-        seeds (list): Random seeds for reproducibility.
-        common_config_parameters (dict): Base configuration dictionary shared across experiments.
-        data_sets_num_labels (dict): Mapping of dataset names to number of labels.
-        start_time (float): Start time of the experiment (for logging elapsed time).
+ORIGINAL_DATASETS = ["agnews", "imdb", "jigsaw"]
+NEW_DATASETS      = ["sst2", "tweeteval", "yahoo_answers"]
+ALL_DATASETS      = ORIGINAL_DATASETS + NEW_DATASETS
 
-    Returns:
-        float: Average F1 score across datasets and seeds for the given trial.
-    """
-    # Hyperparameters chosen by Optuna
+ALL_MODELS   = ["distilbert-base-uncased", "bert-base-uncased", "roberta-base"]
+ALL_SAMPLERS = ["EntropyOnRandomSubsetSampler", "RandomSampler", "BADGESampler"]
+
+# --------------------------------------------------------------------------- #
+# Experiment modes — each entry overrides specific arg defaults                #
+# --------------------------------------------------------------------------- #
+MODES = {
+    # ── Sanity / CI smoke test ───────────────────────────────────────────── #
+    "quick": dict(
+        datasets=["imdb"],
+        strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43],
+        total_rounds=5,
+        optuna_hours=0.05,
+        max_seconds=300,
+        save_dir="./experiments/quick",
+    ),
+
+    # ── All non-Optuna strategies: run these first ───────────────────────── #
+    "baselines": dict(
+        datasets=ALL_DATASETS,
+        strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44, 45, 46],
+        save_dir="./experiments/baselines",
+    ),
+
+    # ── Primary HybridAL: Optuna on main setup ───────────────────────────── #
+    "hybrid": dict(
+        datasets=ALL_DATASETS,
+        strategies=["DeltaF1Strategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44, 45, 46],
+        ablation_signals=["delta_f1"],
+        save_dir="./experiments/hybrid",
+    ),
+
+    # ── Backbone ablation: BERT + RoBERTa ────────────────────────────────── #
+    "backbones": dict(
+        datasets=ALL_DATASETS,
+        strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
+        models=ALL_MODELS,
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44, 45, 46],
+        ablation_signals=["delta_f1"],
+        save_dir="./experiments/backbones",
+    ),
+
+    # ── Sampler ablation: Random + BADGE ─────────────────────────────────── #
+    "samplers": dict(
+        datasets=ALL_DATASETS,
+        strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
+        models=["distilbert-base-uncased"],
+        samplers=ALL_SAMPLERS,
+        seeds=[42, 43, 44, 45, 46],
+        ablation_signals=["delta_f1"],
+        save_dir="./experiments/samplers",
+    ),
+
+    # ── Fixed-switch baselines at k = 3, 5, 7, 10 ───────────────────────── #
+    "fixed_switch": dict(
+        datasets=ALL_DATASETS,
+        strategies=["FixedSwitchStrategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44, 45, 46],
+        fixed_switch_rounds=[3, 5, 7, 10],
+        save_dir="./experiments/fixed_switch",
+    ),
+
+    # ── Signal ablation: requires --best-* flags ─────────────────────────── #
+    "signal_ablation": dict(
+        datasets=ALL_DATASETS,
+        strategies=["DeltaF1Strategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44, 45, 46],
+        ablation_signals=["delta_loss", "delta_accuracy", "gradient_norm"],
+        save_dir="./experiments/signal_ablation",
+    ),
+
+    # ── Full paper run: all of the above combined ─────────────────────────── #
+    "full": dict(
+        datasets=ALL_DATASETS,
+        strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy",
+                    "DeltaF1Strategy", "FixedSwitchStrategy"],
+        models=ALL_MODELS,
+        samplers=ALL_SAMPLERS,
+        seeds=[42, 43, 44, 45, 46],
+        ablation_signals=["delta_f1"],
+        fixed_switch_rounds=[3, 5, 7, 10],
+        save_dir="./experiments/full",
+    ),
+}
+
+
+# --------------------------------------------------------------------------- #
+# Helpers                                                                       #
+# --------------------------------------------------------------------------- #
+
+def model_slug(model_name: str) -> str:
+    """Convert a model name like 'roberta-base' to a filesystem-safe short key."""
+    return model_name.replace("/", "_")
+
+
+def get_sampler_kwargs(sampler_name: str, args) -> dict:
+    """Return constructor kwargs for the given sampler class."""
+    if sampler_name in ("EntropyOnRandomSubsetSampler", "BADGESampler"):
+        return {"random_subset_size": args.random_subset_size}
+    return {}
+
+
+def _log_final(experiment_name, metrics):
+    logging.info(
+        "Final Test Metrics (%s): F1=%.4f, Accuracy=%.4f, Loss=%.4f",
+        experiment_name,
+        metrics['f1_score'],
+        metrics['accuracy'],
+        metrics['loss'],
+    )
+
+
+def _run_single(config_parameters):
+    """Instantiate and run one experiment, save it, return final metrics."""
+    experiment_config = ExperimentConfig(**config_parameters)
+    al = ActiveLearning(experiment_config)
+    final_metrics = al.run_full_pipeline()
+    al.save_experiment()
+    return final_metrics
+
+
+# --------------------------------------------------------------------------- #
+# Optuna objective                                                              #
+# --------------------------------------------------------------------------- #
+
+def objective(trial, strategy, data_sets, seeds, common_config_parameters,
+              start_time=0):
+    """Optuna objective: searches epsilon, k, validation_fraction for DeltaF1Strategy."""
     validation_fraction = trial.suggest_categorical("validation_fraction", [0.02, 0.05, 0.1, 0.2])
-    epsilon = trial.suggest_categorical("epsilon", [0.05, 0.02, 0.01, 0.005])
-    k = trial.suggest_categorical("k", [4, 6, 9, 13])
+    epsilon             = trial.suggest_categorical("epsilon",             [0.05, 0.02, 0.01, 0.005])
+    k                   = trial.suggest_categorical("k",                   [3, 5, 7, 10])
 
+    signal = common_config_parameters.get("_ablation_signal", "delta_f1")
     strat_kwargs = {
         "validation_fraction": validation_fraction,
         "epsilon": epsilon,
-        "k": k
+        "k": k,
+        "signal": signal,
     }
 
+    sampler_name = common_config_parameters.get("sampler_class", "sampler")
+    mslug        = model_slug(common_config_parameters.get("model_name_or_path", "model"))
+
     f1_scores = []
-    # Loop through datasets and seeds
     for data_set in data_sets:
         for seed in seeds:
-            logging.info(f"Evaluating hyperparameters: validation_fraction: {validation_fraction}, epsilon: {epsilon}, k: {k}")
-            logging.info(f"Starting experiment {strategy} on {data_set} with seed {seed}.")
-            logging.info(f"Time passed: {round((time.perf_counter() - start_time)/HOURS, 2)} hours.")
-            experiment_name = f"{strategy}_{validation_fraction}_{epsilon}_{k}_{data_set}_{seed}"
+            logging.info(
+                f"[Optuna] vf={validation_fraction}, eps={epsilon}, k={k} | "
+                f"{data_set} seed={seed} | "
+                f"elapsed {(time.perf_counter()-start_time)/HOURS:.2f}h"
+            )
+            experiment_name = (
+                f"{strategy}_{signal}_{validation_fraction}_{epsilon}_{k}_"
+                f"{sampler_name}_{mslug}_{data_set}_{seed}"
+            )
 
-            config_parameters = common_config_parameters.copy()
+            config_parameters = {k: v for k, v in common_config_parameters.items()
+                                  if not k.startswith("_")}
             config_parameters.update({
                 "experiment_name": experiment_name,
                 "data": data_set,
                 "seed": seed,
-                "num_labels": data_sets_num_labels[data_set],
+                "num_labels": DATASET_NUM_LABELS[data_set],
                 "strategy_class": strategy,
                 "strategy_kwargs": strat_kwargs,
-                "sampler_kwargs": {**common_config_parameters["sampler_kwargs"], "seed": seed}
+                "sampler_kwargs": {**common_config_parameters["sampler_kwargs"], "seed": seed},
             })
 
-            experiment_config = ExperimentConfig(**config_parameters)
-            al = ActiveLearning(experiment_config)
+            metrics = _run_single(config_parameters)
+            f1_scores.append(metrics["f1_score"])
 
-            final_metrics = al.run_full_pipeline()
-            al.save_experiment()
+    return sum(f1_scores) / len(f1_scores) if f1_scores else None
 
-            f1_scores.append(final_metrics["f1_score"])
 
-    if len(f1_scores) == 0:
-        return None
-
-    avg_f1 = sum(f1_scores) / len(f1_scores)
-    return avg_f1
-
+# --------------------------------------------------------------------------- #
+# Argument parsing                                                              #
+# --------------------------------------------------------------------------- #
 
 def parse_args():
-    """
-    Parse command line arguments.
-
-    Returns:
-        argparse.Namespace: Parsed command line arguments with defaults.
-    """
     parser = argparse.ArgumentParser(
-        description="Run active learning experiments with optional hyperparameter optimization",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="Active learning experiment runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
     )
 
-    # Experiment selection
-    parser.add_argument("--datasets", nargs="+", default=["agnews", "imdb", "jigsaw"],
-                        help="Datasets to run experiments on")
-    parser.add_argument("--strategies", nargs="+",
-                        default=["DeltaF1Strategy", "FineTuneStrategy", "NewOnlyStrategy", "RetrainStrategy"],
-                        help="Strategies to evaluate")
-    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44],
-                        help="Random seeds for reproducibility")
+    # ── Mode ─────────────────────────────────────────────────────────────── #
+    parser.add_argument(
+        "--mode",
+        choices=list(MODES.keys()),
+        default=None,
+        help="Experiment preset. Sets sensible defaults; any other flag overrides the mode.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would run (with counts) without executing anything.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-run all experiments, including ones that already have saved results.",
+    )
 
-    # Output
-    parser.add_argument("--save-dir", type=str, default="./experiments/sep_25",
-                        help="Directory to save results")
+    # ── Experiment selection ──────────────────────────────────────────────── #
+    parser.add_argument("--datasets",   nargs="+", default=None)
+    parser.add_argument("--strategies", nargs="+", default=None)
+    parser.add_argument("--models",     nargs="+", default=None)
+    parser.add_argument("--samplers",   nargs="+", default=None)
+    parser.add_argument("--seeds",      nargs="+", type=int, default=None)
 
-    # Model settings
-    parser.add_argument("--model", type=str, default="distilbert-base-uncased",
-                        help="Hugging Face model name or path")
-    parser.add_argument("--max-length", type=int, default=128,
-                        help="Maximum tokenization length")
+    # ── Output ────────────────────────────────────────────────────────────── #
+    parser.add_argument("--save-dir", type=str, default=None)
 
-    # Training settings
-    parser.add_argument("--epochs", type=int, default=5,
-                        help="Training epochs per round")
-    parser.add_argument("--batch-size", type=int, default=16,
-                        help="Training batch size")
-    parser.add_argument("--learning-rate", type=float, default=2e-5,
-                        help="Learning rate")
-    parser.add_argument("--weight-decay", type=float, default=1e-3,
-                        help="Weight decay")
+    # ── Training ──────────────────────────────────────────────────────────── #
+    parser.add_argument("--epochs",        type=int,   default=5)
+    parser.add_argument("--batch-size",    type=int,   default=16)
+    parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--weight-decay",  type=float, default=1e-3)
+    parser.add_argument("--max-length",    type=int,   default=128)
 
-    # Active learning settings
-    parser.add_argument("--initial-pool-size", type=int, default=200,
-                        help="Initial labeled pool size")
-    parser.add_argument("--acquisition-batch-size", type=int, default=32,
-                        help="Number of samples to acquire per round")
-    parser.add_argument("--total-rounds", type=int, default=40,
-                        help="Maximum number of active learning rounds")
-    parser.add_argument("--max-seconds", type=int, default=2400,
-                        help="Maximum seconds per experiment")
+    # ── Active learning ────────────────────────────────────────────────────── #
+    parser.add_argument("--initial-pool-size",      type=int,   default=200)
+    parser.add_argument("--acquisition-batch-size", type=int,   default=32)
+    parser.add_argument("--total-rounds",           type=int,   default=None)
+    parser.add_argument("--max-seconds",            type=int,   default=None)
 
-    # Plateau detection
-    parser.add_argument("--min-rounds-before-plateau", type=int, default=10,
-                        help="Minimum rounds before checking for plateau")
-    parser.add_argument("--plateau-patience", type=int, default=10,
-                        help="Rounds of no improvement before stopping")
-    parser.add_argument("--plateau-f1-threshold", type=float, default=0.0005,
-                        help="Minimum F1 improvement to avoid plateau detection")
+    # ── Plateau ───────────────────────────────────────────────────────────── #
+    parser.add_argument("--min-rounds-before-plateau", type=int,   default=10)
+    parser.add_argument("--plateau-patience",          type=int,   default=-1)   # -1 = disabled; all experiments run full total_rounds
+    parser.add_argument("--plateau-f1-threshold",      type=float, default=0.0005)
 
-    # Sampling
-    parser.add_argument("--random-subset-size", type=int, default=1000,
-                        help="Random subset size for entropy sampler")
+    # ── Sampling ──────────────────────────────────────────────────────────── #
+    parser.add_argument("--random-subset-size", type=int, default=1000)
 
-    # Scheduler
-    parser.add_argument("--scheduler-step-size", type=int, default=10,
-                        help="Step size for StepLR scheduler")
-    parser.add_argument("--scheduler-gamma", type=float, default=0.1,
-                        help="Gamma for StepLR scheduler")
+    # ── Scheduler ─────────────────────────────────────────────────────────── #
+    parser.add_argument("--scheduler-step-size", type=int,   default=10)
+    parser.add_argument("--scheduler-gamma",     type=float, default=0.1)
 
-    # Optuna
-    parser.add_argument("--optuna-hours", type=float, default=15,
-                        help="Maximum hours for Optuna optimization")
+    # ── Optuna ────────────────────────────────────────────────────────────── #
+    parser.add_argument("--optuna-hours", type=float, default=None)
 
-    return parser.parse_args()
+    # ── FixedSwitchStrategy ────────────────────────────────────────────────── #
+    parser.add_argument("--fixed-switch-rounds", nargs="+", type=int, default=None)
+
+    # ── Signal ablation ────────────────────────────────────────────────────── #
+    parser.add_argument(
+        "--ablation-signals", nargs="+", default=None,
+        help="Signals for DeltaF1Strategy. delta_f1 uses Optuna; others need --best-* flags.",
+    )
+    parser.add_argument("--best-epsilon",              type=float, default=None)
+    parser.add_argument("--best-k",                    type=int,   default=None)
+    parser.add_argument("--best-validation-fraction",  type=float, default=None)
+
+    args = parser.parse_args()
+
+    # Apply mode defaults for any arg that was not explicitly set
+    if args.mode is not None:
+        mode_defaults = MODES[args.mode]
+        for key, value in mode_defaults.items():
+            cli_key = key.replace("-", "_")
+            if getattr(args, cli_key, None) is None:
+                setattr(args, cli_key, value)
+
+    # Global fallbacks when no mode was used and flag was not set
+    if args.datasets          is None: args.datasets          = ORIGINAL_DATASETS
+    if args.strategies        is None: args.strategies        = ["DeltaF1Strategy", "FineTuneStrategy",
+                                                                   "NewOnlyStrategy", "RetrainStrategy"]
+    if args.models            is None: args.models            = ["distilbert-base-uncased"]
+    if args.samplers          is None: args.samplers          = ["EntropyOnRandomSubsetSampler"]
+    if args.seeds             is None: args.seeds             = [42, 43, 44, 45, 46]
+    if args.save_dir          is None: args.save_dir          = "./experiments/sep_25"
+    if args.total_rounds      is None: args.total_rounds      = 25
+    if args.max_seconds       is None: args.max_seconds       = 2400
+    if args.optuna_hours      is None: args.optuna_hours      = 48
+    if args.fixed_switch_rounds is None: args.fixed_switch_rounds = [3, 5, 7, 10]
+    if args.ablation_signals  is None: args.ablation_signals  = ["delta_f1"]
+
+    return args
+
+
+# --------------------------------------------------------------------------- #
+# Experiment plan builder (used for counting + dry-run + actual run)           #
+# --------------------------------------------------------------------------- #
+
+def build_experiment_list(args, save_dir: Path):
+    """
+    Enumerate every (experiment_name, strategy, config) that would be run.
+    Returns a list of dicts, each with keys: name, strategy, config_parameters.
+    """
+    experiments = []
+
+    for model_name in args.models:
+        mslug = model_slug(model_name)
+
+        base_config = {
+            "save_dir":              save_dir,
+            "initial_pool_size":     args.initial_pool_size,
+            "acquisition_batch_size":args.acquisition_batch_size,
+            "max_seconds":           args.max_seconds,
+            "total_rounds":          args.total_rounds,
+            "min_rounds_before_plateau": args.min_rounds_before_plateau,
+            "plateau_patience":      args.plateau_patience,
+            "plateau_f1_threshold":  args.plateau_f1_threshold,
+            "model_name_or_path":    model_name,
+            "tokenizer_kwargs": {
+                "max_length":         args.max_length,
+                "padding":            "max_length",
+                "truncation":         True,
+                "add_special_tokens": True,
+                "return_tensors":     "pt",
+            },
+            "optimizer_class":  "AdamW",
+            "optimizer_kwargs": {"lr": args.learning_rate, "weight_decay": args.weight_decay},
+            "criterion_class":  "CrossEntropyLoss",
+            "criterion_kwargs": {},
+            "scheduler_class":  None,
+            "scheduler_kwargs": {},
+            "epochs":     args.epochs,
+            "batch_size": args.batch_size,
+        }
+
+        for sampler_name in args.samplers:
+            sampler_kwargs_base = get_sampler_kwargs(sampler_name, args)
+            common = {
+                **base_config,
+                "sampler_class":  sampler_name,
+                "sampler_kwargs": sampler_kwargs_base,
+            }
+
+            for strategy in args.strategies:
+
+                if strategy == "FixedSwitchStrategy":
+                    for switch_r in args.fixed_switch_rounds:
+                        for data_set, seed in itertools.product(args.datasets, args.seeds):
+                            name = (
+                                f"FixedSwitchStrategy_r{switch_r}_{sampler_name}"
+                                f"_{mslug}_{data_set}_{seed}"
+                            )
+                            cfg = {**common,
+                                   "experiment_name": name,
+                                   "data":            data_set,
+                                   "seed":            seed,
+                                   "num_labels":      DATASET_NUM_LABELS[data_set],
+                                   "strategy_class":  strategy,
+                                   "strategy_kwargs": {"switch_round": switch_r},
+                                   "sampler_kwargs":  {**sampler_kwargs_base, "seed": seed}}
+                            experiments.append({"name": name, "strategy": strategy, "config": cfg})
+
+                elif strategy == "DeltaF1Strategy":
+                    for signal in args.ablation_signals:
+                        if signal != "delta_f1":
+                            # These will be direct runs (no Optuna)
+                            if args.best_epsilon is None:
+                                continue  # skip — no hyperparams to enumerate
+                            for data_set, seed in itertools.product(args.datasets, args.seeds):
+                                name = (
+                                    f"DeltaF1Strategy_{signal}_{args.best_epsilon}_{args.best_k}_"
+                                    f"{args.best_validation_fraction}_{sampler_name}_{mslug}_{data_set}_{seed}"
+                                )
+                                cfg = {**common,
+                                       "experiment_name": name,
+                                       "data":            data_set,
+                                       "seed":            seed,
+                                       "num_labels":      DATASET_NUM_LABELS[data_set],
+                                       "strategy_class":  strategy,
+                                       "strategy_kwargs": {
+                                           "signal":              signal,
+                                           "epsilon":             args.best_epsilon,
+                                           "k":                   args.best_k,
+                                           "validation_fraction": args.best_validation_fraction,
+                                       },
+                                       "sampler_kwargs": {**sampler_kwargs_base, "seed": seed}}
+                                experiments.append({"name": name, "strategy": "DeltaF1Ablation", "config": cfg})
+                        else:
+                            # delta_f1 runs through Optuna — represent as a single placeholder
+                            experiments.append({
+                                "name":     f"[Optuna] DeltaF1Strategy_{sampler_name}_{mslug}_({'|'.join(args.datasets)})",
+                                "strategy": "DeltaF1Strategy_Optuna",
+                                "config":   {**common, "_ablation_signal": "delta_f1"},
+                            })
+
+                else:
+                    for data_set, seed in itertools.product(args.datasets, args.seeds):
+                        name = f"{strategy}_{sampler_name}_{mslug}_{data_set}_{seed}"
+                        cfg = {**common,
+                               "experiment_name": name,
+                               "data":            data_set,
+                               "seed":            seed,
+                               "num_labels":      DATASET_NUM_LABELS[data_set],
+                               "strategy_class":  strategy,
+                               "strategy_kwargs": {},
+                               "sampler_kwargs":  {**sampler_kwargs_base, "seed": seed}}
+                        experiments.append({"name": name, "strategy": strategy, "config": cfg})
+
+    return experiments
+
+
+# --------------------------------------------------------------------------- #
+# Main                                                                          #
+# --------------------------------------------------------------------------- #
 
 if __name__ == "__main__":
     args = parse_args()
 
-    start_time = time.perf_counter()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
-    # Number of labels per dataset
-    data_sets_num_labels = {"agnews": 4, "imdb": 2, "jigsaw": 2}
+    # Inject device into args so build_experiment_list can include it
+    # (device is not a CLI arg — set it here after torch check)
+    save_dir = Path(args.save_dir)
 
-    # Seeds, strats and datasets from CLI
-    seeds = args.seeds
-    strategies = args.strategies
-    data_sets = args.datasets
-
-    # Common configuration parameters
-    # Note: Optimizer (Adam), loss function (CrossEntropyLoss), scheduler (StepLR),
-    # and sampler (EntropyOnRandomSubsetSampler) are fixed.
-    common_config_parameters = {
-        "save_dir": Path(args.save_dir),
-        "initial_pool_size": args.initial_pool_size,
-        "acquisition_batch_size": args.acquisition_batch_size,
-        "max_seconds": args.max_seconds,
-        "total_rounds": args.total_rounds,
-        "min_rounds_before_plateau": args.min_rounds_before_plateau,
-        "plateau_patience": args.plateau_patience,
-        "plateau_f1_threshold": args.plateau_f1_threshold,
-        "model_name_or_path": args.model,
-        "tokenizer_kwargs": {
-            "max_length": args.max_length,
-            "padding": "max_length",
-            "truncation": True,
-            "add_special_tokens": True,
-            "return_tensors": "pt"
-        },
-        "optimizer_class": "Adam",
-        "optimizer_kwargs": {"lr": args.learning_rate, "weight_decay": args.weight_decay},
-        "criterion_class": "CrossEntropyLoss",
-        "criterion_kwargs": {},
-        "scheduler_class": "StepLR",
-        "scheduler_kwargs": {"step_size": args.scheduler_step_size, "gamma": args.scheduler_gamma},
-        "sampler_class": "EntropyOnRandomSubsetSampler",
-        "sampler_kwargs": {"random_subset_size": args.random_subset_size},
-        "device": device,
-        "epochs": args.epochs,
-        "batch_size": args.batch_size,
-    }
-
-    # Print configuration
-    print("=" * 80)
+    # ── Print configuration ─────────────────────────────────────────────── #
+    mode_label = f"  mode     : {args.mode}" if args.mode else "  mode     : (custom)"
+    print("=" * 70)
     print("EXPERIMENT CONFIGURATION")
-    print("=" * 80)
-    for key, value in common_config_parameters.items():
-        print(f"{key}: {value}")
-    print(f"datasets: {data_sets}")
-    print(f"strategies: {strategies}")
-    print(f"seeds: {seeds}")
-    print("=" * 80)
+    print("=" * 70)
+    print(mode_label)
+    print(f"  device   : {device}")
+    print(f"  save_dir : {save_dir}")
+    print(f"  datasets : {args.datasets}")
+    print(f"  strategies: {args.strategies}")
+    print(f"  models   : {args.models}")
+    print(f"  samplers : {args.samplers}")
+    print(f"  seeds    : {args.seeds}")
+    print(f"  rounds   : {args.total_rounds}  epochs: {args.epochs}  batch: {args.batch_size}")
+    print(f"  signals  : {args.ablation_signals}")
+    if "FixedSwitchStrategy" in args.strategies:
+        print(f"  fixed_switch_rounds: {args.fixed_switch_rounds}")
+    print("=" * 70)
 
-    # Run experiments for each strategy
-    for strategy in strategies:
-        if strategy == "DeltaF1Strategy":
-            logging.info(f"Running Optuna study for {strategy} (averaging across datasets & seeds)")
-            study = optuna.create_study(direction="maximize")
-            study.optimize(
-                lambda trial: objective(trial, strategy, data_sets, seeds, common_config_parameters,
-                                        data_sets_num_labels, start_time),
-                timeout=int(args.optuna_hours * HOURS)
-            )
-            logging.info(f"Best params for {strategy}: {study.best_params}, Avg F1={study.best_value:.4f}")
-        else:
-            # For other strategies, just run experiments directly without Optuna
-            for data_set, seed in itertools.product(data_sets, seeds):
-                experiment_name = f"{strategy}_{data_set}_{seed}"
-                experiment_path = common_config_parameters["save_dir"] / experiment_name
-                if experiment_path.exists():
-                    logging.info(f"Skipping existing experiment: {experiment_name}")
-                    continue
+    # ── Build experiment list for counting / dry-run ─────────────────────── #
+    experiment_list = build_experiment_list(args, save_dir)
 
-                # Build configuration for this experiment
-                config_parameters = common_config_parameters.copy()
-                config_parameters.update({
-                    "experiment_name": experiment_name,
-                    "data": data_set,
-                    "seed": seed,
-                    "num_labels": data_sets_num_labels[data_set],
-                    "strategy_class": strategy,
-                    "strategy_kwargs": {},
-                    "sampler_kwargs": {**common_config_parameters["sampler_kwargs"], "seed": seed}
-                })
+    # Separate Optuna placeholders from runnable experiments
+    optuna_runs  = [e for e in experiment_list if e["strategy"] == "DeltaF1Strategy_Optuna"]
+    direct_runs  = [e for e in experiment_list if e["strategy"] != "DeltaF1Strategy_Optuna"]
 
-                # Run active learning pipeline
-                experiment_config = ExperimentConfig(**config_parameters)
-                al = ActiveLearning(experiment_config)
-                final_metrics = al.run_full_pipeline()
-                al.save_experiment()
-                logging.info(
-                    "Final Test Metrics (%s): F1=%.4f, Accuracy=%.4f, Loss=%.4f",
-                    experiment_name,
-                    final_metrics['f1_score'],
-                    final_metrics['accuracy'],
-                    final_metrics['loss']
-                )
+    existing     = [] if args.force else [e for e in direct_runs if (save_dir / e["name"]).exists()]
+    pending      = direct_runs if args.force else [e for e in direct_runs if not (save_dir / e["name"]).exists()]
 
-    logging.info("Experimentation Complete")
+    print(f"\nDirect experiments : {len(direct_runs):4d} total  "
+          f"({len(existing)} already done, {len(pending)} to run)")
+    print(f"Optuna runs        : {len(optuna_runs):4d}  "
+          f"(each runs until --optuna-hours={args.optuna_hours}h timeout)")
+
+    if args.dry_run:
+        print("\n── Pending direct experiments ──")
+        for i, e in enumerate(pending, 1):
+            print(f"  {i:4d}. [{e['strategy']:30s}] {e['name']}")
+        if optuna_runs:
+            print("\n── Optuna runs ──")
+            for e in optuna_runs:
+                print(f"        {e['name']}")
+        print("\nDry run complete. Nothing was executed.")
+        raise SystemExit(0)
+
+    # ── Inject device into every config ──────────────────────────────────── #
+    for e in experiment_list:
+        e["config"]["device"] = device
+
+    start_time   = time.perf_counter()
+    total_to_run = len(pending) + len(optuna_runs)
+    done_count   = 0
+
+    # ── Run direct experiments ─────────────────────────────────────────────── #
+    for e in pending:
+        done_count += 1
+        logging.info(
+            f"\n[{done_count}/{total_to_run}] {e['name']}"
+        )
+        try:
+            metrics = _run_single(e["config"])
+            _log_final(e["name"], metrics)
+        except Exception as exc:
+            logging.error(f"FAILED: {e['name']} — {exc}", exc_info=True)
+
+    # ── Optuna runs (DeltaF1Strategy, delta_f1 signal) ───────────────────── #
+    for e in optuna_runs:
+        done_count += 1
+        common_cfg = e["config"].copy()
+        signal     = common_cfg.get("_ablation_signal", "delta_f1")
+        mslug_val  = model_slug(common_cfg.get("model_name_or_path", "model"))
+        sampler_n  = common_cfg.get("sampler_class", "sampler")
+
+        logging.info(
+            f"\n[{done_count}/{total_to_run}] Optuna DeltaF1Strategy "
+            f"signal={signal} model={mslug_val} sampler={sampler_n}"
+        )
+
+        optuna_seeds = args.seeds[:3]  # use 3 seeds for Optuna to keep each trial ~3h; full 5-seed eval runs separately
+        study = optuna.create_study(direction="maximize")
+        study.optimize(
+            lambda trial: objective(
+                trial, "DeltaF1Strategy",
+                args.datasets, optuna_seeds,
+                common_cfg, start_time,
+            ),
+            timeout=int(args.optuna_hours * HOURS),
+        )
+        logging.info(
+            f"Best params: {study.best_params}  Avg F1={study.best_value:.4f}"
+        )
+        print(
+            f"\n{'='*60}\n"
+            f"  BEST HYPERPARAMS (DeltaF1Strategy, signal={signal},\n"
+            f"  model={mslug_val}, sampler={sampler_n}):\n"
+            f"    --best-epsilon              {study.best_params.get('epsilon')}\n"
+            f"    --best-k                    {study.best_params.get('k')}\n"
+            f"    --best-validation-fraction  {study.best_params.get('validation_fraction')}\n"
+            f"  Avg F1 = {study.best_value:.4f}\n"
+            f"{'='*60}\n"
+        )
+        # Auto-save best hyperparams so run_experiments.sh / generate_results.py can read them
+        _hyper_out = {
+            "epsilon":             study.best_params.get("epsilon"),
+            "k":                   study.best_params.get("k"),
+            "validation_fraction": study.best_params.get("validation_fraction"),
+            "avg_f1":              study.best_value,
+        }
+        import json as _json
+        with open("best_hyperparams.json", "w") as _hf:
+            _json.dump(_hyper_out, _hf, indent=2)
+        logging.info(f"Best hyperparams saved to best_hyperparams.json")
+
+    elapsed = (time.perf_counter() - start_time) / HOURS
+    logging.info(f"All experiments complete. Total elapsed: {elapsed:.2f}h")
