@@ -170,10 +170,10 @@ def get_summary_table(experiments_df: pd.DataFrame, hybrid_hyper: dict):
             is_delta_f1 = (strategy == 'DeltaF1Strategy')
 
             filtered_df = filter_experiments_df(experiments_df, dataset=dataset, strategy=strategy,
-                                                epsilon=hybrid_hyper['epsilon'] if is_delta_f1 else None,
-                                                k=hybrid_hyper['k'] if is_delta_f1 else None,
-                                                validation_fraction=hybrid_hyper[
-                                                    'validation_fraction'] if is_delta_f1 else None)
+                                                epsilon=hybrid_hyper.get('epsilon') if is_delta_f1 else None,
+                                                k=hybrid_hyper.get('k') if is_delta_f1 else None,
+                                                validation_fraction=hybrid_hyper.get(
+                                                    'validation_fraction') if is_delta_f1 else None)
 
             training_times = []
             for _, row in filtered_df.iterrows():
@@ -243,12 +243,14 @@ def plot_f1_vs_time_avg(
                     experiments_df, dataset=dataset,
                     strategy=strategy,
                     seed=seed,
-                    epsilon=hybrid_hyper['epsilon'] if is_delta_f1 else None,
-                    k=hybrid_hyper['k'] if is_delta_f1 else None,
-                    validation_fraction=hybrid_hyper['validation_fraction'] if is_delta_f1 else None
+                    epsilon=hybrid_hyper.get('epsilon') if is_delta_f1 else None,
+                    k=hybrid_hyper.get('k') if is_delta_f1 else None,
+                    validation_fraction=hybrid_hyper.get('validation_fraction') if is_delta_f1 else None
                 )
 
                 # Build cumulative time curve
+                if row.empty:
+                    continue
                 round_val_stats = row['round_val_stats'].values[0]
                 times, f1s = [], []
                 t = 0.0
@@ -261,6 +263,8 @@ def plot_f1_vs_time_avg(
                     seed_curves.append((times, f1s))
 
             # Set the common time grid to be between 0 and the minimum max time across seeds
+            if not seed_curves:
+                continue
             max_times = [curve[0][-1] for curve in seed_curves]
             t_max_common = np.min(max_times)
 
@@ -295,6 +299,7 @@ def plot_f1_vs_time_avg(
         plt.legend(ncol=2, fontsize=8)
         plt.tight_layout()
         if save_dir_path:
+            os.makedirs(save_dir_path, exist_ok=True)
             plt.savefig(os.path.join(save_dir_path, f'f1_vs_time_{dataset}.png'), dpi=dpi)
         plt.show()
 
@@ -359,6 +364,7 @@ def plot_hybrid_hyper_variations(experiments_df: pd.DataFrame, best_hybrid_hyper
         plt.tight_layout()
 
         if save_dir_path:
+            os.makedirs(save_dir_path, exist_ok=True)
             plt.savefig(os.path.join(save_dir_path, f'hybrid_hyper_variation_{param}.png'), dpi=dpi)
 
         plt.show()
@@ -388,8 +394,12 @@ def plot_test_f1_bar_chart(experiments_df: pd.DataFrame, best_hybrid_hyper: dict
     }
 
     for strategy in experiments_df['strategy'].unique():
+        if strategy not in strategy_names:
+            continue
         info = filter_experiments_df(experiments_df, strategy=strategy,
-                                     **best_hybrid_hyper) if strategy == 'DeltaF1Strategy' else filter_experiments_df(
+                                     **{k: v for k, v in best_hybrid_hyper.items()
+                                        if k in ("epsilon", "k", "validation_fraction")}
+                                     ) if strategy == 'DeltaF1Strategy' else filter_experiments_df(
             experiments_df, strategy=strategy)
 
         mean_f1 = info['test_f1_score'].mean()
@@ -404,7 +414,7 @@ def plot_test_f1_bar_chart(experiments_df: pd.DataFrame, best_hybrid_hyper: dict
     bars = []
     # Plot Sorted bars
     for name, mean_f1, std_f1 in results:
-        color = strategy_colors[name]
+        color = strategy_colors.get(name, "#888888")
         bar = plt.bar(name, mean_f1, yerr=std_f1, capsize=5, color=color)
         bars.append((bar, mean_f1, std_f1))
 
@@ -443,9 +453,9 @@ def plot_confusion_heatmaps_hybrid(experiments_df: pd.DataFrame, hybrid_hyper: d
             experiments_df,
             strategy='DeltaF1Strategy',
             dataset=dataset,
-            epsilon=hybrid_hyper['epsilon'],
-            k=hybrid_hyper['k'],
-            validation_fraction=hybrid_hyper['validation_fraction']
+            epsilon=hybrid_hyper.get('epsilon'),
+            k=hybrid_hyper.get('k'),
+            validation_fraction=hybrid_hyper.get('validation_fraction')
         )
 
         # Sum the confusion matrices
@@ -477,26 +487,23 @@ def plot_confusion_heatmaps_hybrid(experiments_df: pd.DataFrame, hybrid_hyper: d
         plt.ylabel('True Label')
         plt.tight_layout()
         if save_dir_path:
+            os.makedirs(save_dir_path, exist_ok=True)
             plt.savefig(os.path.join(save_dir_path, f'cm_hybrid_{dataset}.png'), dpi=dpi)
         plt.show()
 
 
+def _total_training_time(df: pd.DataFrame) -> np.ndarray:
+    """Sum per-round training_time from round_val_stats for each row."""
+    times = []
+    for rvs in df['round_val_stats'].dropna():
+        times.append(sum(float(r['training_time']) for r in rvs))
+    return np.array(times)
+
+
 def get_significance_table(experiments_df: pd.DataFrame, hybrid_hyper: dict) -> pd.DataFrame:
     """
-    Compute Welch's t-test between DeltaF1Strategy and every other strategy, per dataset.
-
-    Tests the null hypothesis that DeltaF1Strategy and the baseline have equal mean
-    test F1 scores. Uses Welch's t-test (unequal variance assumed).
-
-    Args:
-        experiments_df (pd.DataFrame): DataFrame from get_experiments_df().
-        hybrid_hyper (dict): Hyperparameters for DeltaF1Strategy
-                            (keys: 'epsilon', 'k', 'validation_fraction').
-
-    Returns:
-        pd.DataFrame: Table with columns: Dataset, Baseline Strategy,
-                      HybridAL mean F1, Baseline mean F1, t-statistic, p-value,
-                      Significant (p<0.05).
+    Compute Welch's t-test between DeltaF1Strategy and every other strategy, per dataset,
+    across four metrics: test F1, test accuracy, test loss, and total training time.
     """
     rows = []
 
@@ -505,34 +512,127 @@ def get_significance_table(experiments_df: pd.DataFrame, hybrid_hyper: dict) -> 
             experiments_df,
             dataset=dataset,
             strategy='DeltaF1Strategy',
-            epsilon=hybrid_hyper['epsilon'],
-            k=hybrid_hyper['k'],
-            validation_fraction=hybrid_hyper['validation_fraction'],
+            epsilon=hybrid_hyper.get('epsilon'),
+            k=hybrid_hyper.get('k'),
+            validation_fraction=hybrid_hyper.get('validation_fraction'),
         )
-        hybrid_f1 = hybrid_df['test_f1_score'].dropna().values
+
+        h_f1   = hybrid_df['test_f1_score'].dropna().values
+        h_acc  = hybrid_df['test_accuracy'].dropna().values
+        h_loss = hybrid_df['test_loss'].dropna().values
+        h_time = _total_training_time(hybrid_df)
 
         for strategy in experiments_df['strategy'].unique():
             if strategy == 'DeltaF1Strategy':
                 continue
             baseline_df = filter_experiments_df(experiments_df, dataset=dataset, strategy=strategy)
-            baseline_f1 = baseline_df['test_f1_score'].dropna().values
 
-            if len(hybrid_f1) < 2 or len(baseline_f1) < 2:
+            b_f1   = baseline_df['test_f1_score'].dropna().values
+            b_acc  = baseline_df['test_accuracy'].dropna().values
+            b_loss = baseline_df['test_loss'].dropna().values
+            b_time = _total_training_time(baseline_df)
+
+            if len(h_f1) < 2 or len(b_f1) < 2:
                 continue
 
-            t_stat, p_val = scipy_stats.ttest_ind(hybrid_f1, baseline_f1, equal_var=False)
+            def _test(a, b):
+                if len(a) < 2 or len(b) < 2:
+                    return float('nan'), float('nan')
+                t, p = scipy_stats.ttest_ind(a, b, equal_var=False)
+                return round(float(t), 3), round(float(p), 4)
+
+            t_f1,   p_f1   = _test(h_f1,   b_f1)
+            t_acc,  p_acc  = _test(h_acc,  b_acc)
+            t_loss, p_loss = _test(h_loss, b_loss)
+            t_time, p_time = _test(h_time, b_time)
+
             rows.append({
-                'Dataset': dataset_names.get(dataset, dataset),
-                'Baseline Strategy': strategy_names.get(strategy, strategy),
-                'HybridAL mean F1': round(hybrid_f1.mean(), 4),
-                'Baseline mean F1': round(baseline_f1.mean(), 4),
-                'Mean ΔF1': round(hybrid_f1.mean() - baseline_f1.mean(), 4),
-                't-statistic': round(t_stat, 3),
-                'p-value': round(p_val, 4),
-                'Significant (p<0.05)': p_val < 0.05,
+                'Dataset':              dataset_names.get(dataset, dataset),
+                'Baseline':             strategy_names.get(strategy, strategy),
+                # F1
+                'Hybrid F1':            round(h_f1.mean(), 4),
+                'Base F1':              round(b_f1.mean(), 4),
+                'ΔF1':                  round(h_f1.mean() - b_f1.mean(), 4),
+                'F1 p-value':           p_f1,
+                'F1 sig':               p_f1 < 0.05 if not np.isnan(p_f1) else False,
+                # Accuracy
+                'Hybrid Acc':           round(h_acc.mean(), 4) if len(h_acc) else float('nan'),
+                'Base Acc':             round(b_acc.mean(), 4) if len(b_acc) else float('nan'),
+                'ΔAcc':                 round(h_acc.mean() - b_acc.mean(), 4) if len(h_acc) and len(b_acc) else float('nan'),
+                'Acc p-value':          p_acc,
+                'Acc sig':              p_acc < 0.05 if not np.isnan(p_acc) else False,
+                # Loss
+                'Hybrid Loss':          round(h_loss.mean(), 4) if len(h_loss) else float('nan'),
+                'Base Loss':            round(b_loss.mean(), 4) if len(b_loss) else float('nan'),
+                'ΔLoss':                round(h_loss.mean() - b_loss.mean(), 4) if len(h_loss) and len(b_loss) else float('nan'),
+                'Loss p-value':         p_loss,
+                'Loss sig':             p_loss < 0.05 if not np.isnan(p_loss) else False,
+                # Training time
+                'Hybrid Time (s)':      round(h_time.mean(), 1) if len(h_time) else float('nan'),
+                'Base Time (s)':        round(b_time.mean(), 1) if len(b_time) else float('nan'),
+                'ΔTime (s)':            round(h_time.mean() - b_time.mean(), 1) if len(h_time) and len(b_time) else float('nan'),
+                'Time p-value':         p_time,
+                'Time sig':             p_time < 0.05 if not np.isnan(p_time) else False,
             })
 
     return pd.DataFrame(rows)
+
+
+def plot_training_time_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                                   save_dir_path: str = None):
+    """
+    Grouped bar chart: mean total training time per strategy, one group per dataset.
+    Only includes DistilBERT / default-sampler rows so comparisons are fair.
+    """
+    strategies = _COMPARISON_STRATEGIES
+    datasets   = [d for d in dataset_names if d in experiments_df['dataset'].unique()]
+
+    n_strategies = len(strategies)
+    x = np.arange(len(datasets))
+    width = 0.8 / n_strategies
+    cmap = plt.get_cmap("Set2")
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    for i, strategy in enumerate(strategies):
+        means, stds = [], []
+        for dataset in datasets:
+            is_delta = strategy == 'DeltaF1Strategy'
+            sub = filter_experiments_df(
+                experiments_df, dataset=dataset, strategy=strategy,
+                epsilon=hybrid_hyper.get('epsilon') if is_delta else None,
+                k=hybrid_hyper.get('k') if is_delta else None,
+                validation_fraction=hybrid_hyper.get('validation_fraction') if is_delta else None,
+            )
+            # filter to default backbone / sampler if columns present
+            if 'model' in sub.columns:
+                sub = sub[sub['model'].isin(['distilbert-base-uncased', None, float('nan')]) |
+                          sub['model'].isna()]
+            if 'sampler' in sub.columns:
+                sub = sub[sub['sampler'].isin(['EntropyOnRandomSubsetSampler', None, float('nan')]) |
+                          sub['sampler'].isna()]
+            times = _total_training_time(sub)
+            means.append(times.mean() if len(times) else 0.0)
+            stds.append(times.std()  if len(times) > 1 else 0.0)
+
+        offset = (i - n_strategies / 2 + 0.5) * width
+        label  = _STRATEGY_DISPLAY.get(strategy, strategy)
+        color  = cmap(i / max(n_strategies - 1, 1))
+        ax.bar(x + offset, means, width, yerr=stds, capsize=4,
+               label=label, color=color, alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([dataset_names[d] for d in datasets], rotation=15, ha='right')
+    ax.set_ylabel('Mean Total Training Time (s)')
+    ax.set_title('Total Training Time per Strategy and Dataset')
+    ax.legend(frameon=False)
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
+        plt.savefig(os.path.join(save_dir_path, 'training_time_comparison.png'), dpi=dpi)
+    plt.show()
 
 
 def plot_switch_heatmap(experiments_df: pd.DataFrame, save_dir_path: str = None):
@@ -568,6 +668,7 @@ def plot_switch_heatmap(experiments_df: pd.DataFrame, save_dir_path: str = None)
     plt.ylabel(r"$\varepsilon$")
     plt.tight_layout()
     if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
         plt.savefig(os.path.join(save_dir_path, "switch_round_heatmap.png"), dpi=dpi)
     plt.show()
 
@@ -594,16 +695,18 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
                 experiments_df,
                 dataset=dataset,
                 strategy='DeltaF1Strategy',
-                epsilon=best_hybrid_hyper['epsilon'],
-                k=best_hybrid_hyper['k'],
-                validation_fraction=best_hybrid_hyper['validation_fraction'],
+                epsilon=best_hybrid_hyper.get('epsilon'),
+                k=best_hybrid_hyper.get('k'),
+                validation_fraction=best_hybrid_hyper.get('validation_fraction'),
                 seed=j
             )
 
+            if info.empty:
+                continue
             f1_scores = [round['f1_score'] for round in info['round_val_stats'].values[0]]
 
             label = f"Seed {j}"
-            color = cmap.colors[color_i]
+            color = cmap.colors[color_i % len(cmap.colors)]
             color_i += 1
 
             # Prefer switch_round from experiment data; fall back to legacy hardcoded dict
@@ -619,6 +722,9 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
                 plt.scatter(switch_round_val, f1_scores[switch_round_val - 1], color=color, s=50,
                             edgecolor='black', zorder=5, label=f"Switch Round (Seed {j})")
 
+        if not total_rounds:
+            plt.close()
+            continue
         plt.xlabel('Round Number')
         plt.ylabel('Validation Set Macro-F1 Score')
         plt.xticks(range(1, max(total_rounds) + 1), fontsize=10)
@@ -626,7 +732,328 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
         plt.legend(fontsize='x-small')
         plt.grid(alpha=0.4)
         if save_dir_path is not None:
+            os.makedirs(save_dir_path, exist_ok=True)
             plt.savefig(os.path.join(save_dir_path, f'f1_vs_round_hybrid_{dataset}.png'), dpi=dpi)
+        plt.show()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Comparison plots (backbone / signal / sampler / fixed-switch / per-dataset)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BACKBONE_COLORS = {
+    "distilbert-base-uncased": "#2196F3",
+    "bert-base-uncased":       "#FF9800",
+    "roberta-base":            "#4CAF50",
+}
+_BACKBONE_DISPLAY = {
+    "distilbert-base-uncased": "DistilBERT",
+    "bert-base-uncased":       "BERT",
+    "roberta-base":            "RoBERTa",
+}
+_SAMPLER_COLORS = {
+    "EntropyOnRandomSubsetSampler": "#2196F3",
+    "RandomSampler":                "#FF9800",
+    "BADGESampler":                 "#9C27B0",
+}
+_SAMPLER_DISPLAY = {
+    "EntropyOnRandomSubsetSampler": "Entropy",
+    "RandomSampler":                "Random",
+    "BADGESampler":                 "BADGE",
+}
+_SIGNAL_COLORS = {
+    "delta_f1":       "#E53935",
+    "delta_loss":     "#757575",
+    "delta_accuracy": "#757575",
+    "gradient_norm":  "#757575",
+}
+_SIGNAL_DISPLAY = {
+    "delta_f1":       r"ΔF1 (proposed)",
+    "delta_loss":     r"ΔLoss",
+    "delta_accuracy": r"ΔAccuracy",
+    "gradient_norm":  r"Grad Norm",
+}
+_COMPARISON_STRATEGIES = ["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"]
+
+# (column_key, y-axis label, scale_factor, lower_is_better)
+_METRICS = [
+    ("test_f1_score",  "Test F1 (%)",            100, False),
+    ("test_accuracy",  "Test Accuracy (%)",       100, False),
+    ("test_loss",      "Test Loss",                 1, True),
+    ("total_time",     "Total Train Time (s)",      1, True),
+]
+
+
+def _mean_std_f1(df):
+    """Return (mean*100, std*100) for test_f1_score in df."""
+    f1 = df["test_f1_score"].dropna()
+    return (f1.mean() * 100 if not f1.empty else 0.0,
+            f1.std()  * 100 if len(f1) > 1 else 0.0)
+
+
+def _metric_stats(df):
+    """Return dict metric_key -> (mean, std) for all four _METRICS."""
+    out = {}
+    for col, _, scale, _ in _METRICS:
+        if col == "total_time":
+            vals = _total_training_time(df)
+        else:
+            vals = df[col].dropna().values * scale if col in df.columns else np.array([])
+        out[col] = (float(vals.mean()) if len(vals) else 0.0,
+                    float(vals.std())  if len(vals) > 1 else 0.0)
+    return out
+
+
+def plot_backbone_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                              save_dir_path: str = None):
+    """
+    2×2 subplot grid comparing all four metrics per strategy across backbone models.
+    X-axis: strategy, Groups: DistilBERT / BERT / RoBERTa.
+    """
+    strategies = _COMPARISON_STRATEGIES
+    backbones  = sorted(experiments_df["model"].dropna().unique())
+    n_s = len(strategies)
+    n_b = len(backbones)
+    width = 0.7 / max(n_b, 1)
+    x = np.arange(n_s)
+
+    fig, axes = plt.subplots(2, 2, figsize=(max(10, n_s * 2.5), 9))
+    axes = axes.flatten()
+
+    for ax_i, (col, ylabel, scale, _) in enumerate(_METRICS):
+        ax = axes[ax_i]
+        for i, backbone in enumerate(backbones):
+            means, stds = [], []
+            for strat in strategies:
+                kwargs = dict(strategy=strat, model=backbone)
+                if strat == "DeltaF1Strategy":
+                    kwargs.update({k: v for k, v in hybrid_hyper.items() if k in ("epsilon", "k")})
+                sub = filter_experiments_df(experiments_df, **kwargs)
+                m, s = _metric_stats(sub)[col]
+                means.append(m); stds.append(s)
+            offset = (i - n_b / 2 + 0.5) * width
+            color  = _BACKBONE_COLORS.get(backbone, f"C{i}")
+            label  = _BACKBONE_DISPLAY.get(backbone, backbone)
+            ax.bar(x + offset, means, width, yerr=stds, capsize=4,
+                   label=label, color=color, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels([strategy_names.get(s, s) for s in strategies], fontsize=9, rotation=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(ylabel, fontsize=11)
+        ax.grid(axis="y", alpha=0.3)
+        if ax_i == 0:
+            ax.legend(fontsize=8)
+
+    fig.suptitle("Backbone Ablation (mean ± std over all datasets × seeds)", fontsize=13)
+    plt.tight_layout()
+    if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
+        plt.savefig(os.path.join(save_dir_path, "backbone_comparison.png"), dpi=dpi)
+    plt.show()
+
+
+def plot_signal_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                            save_dir_path: str = None):
+    """
+    2×2 subplot grid of horizontal bar charts — one panel per metric,
+    comparing switching signals (delta_f1 highlighted).
+    """
+    signals = ["delta_f1", "delta_loss", "delta_accuracy", "gradient_norm"]
+    sig_labels = [_SIGNAL_DISPLAY.get(s, s) for s in signals]
+    sig_colors = [_SIGNAL_COLORS.get(s, "gray") for s in signals]
+
+    # Collect per-signal subsets once
+    subs = {}
+    for sig in signals:
+        if sig == "delta_f1":
+            sub = filter_experiments_df(experiments_df, strategy="DeltaF1Strategy",
+                                        **{k: v for k, v in hybrid_hyper.items()
+                                           if k in ("epsilon", "k")})
+            if "signal" in sub.columns:
+                sub = sub[sub["signal"].isna() | (sub["signal"] == "delta_f1")]
+        else:
+            sub = experiments_df[experiments_df["signal"] == sig] \
+                if "signal" in experiments_df.columns else pd.DataFrame()
+        subs[sig] = sub
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    axes = axes.flatten()
+    y = np.arange(len(signals))
+
+    for ax_i, (col, xlabel, scale, _) in enumerate(_METRICS):
+        ax = axes[ax_i]
+        means = [_metric_stats(subs[s])[col][0] for s in signals]
+        stds  = [_metric_stats(subs[s])[col][1] for s in signals]
+        bars  = ax.barh(y, means, xerr=stds, capsize=4, color=sig_colors, alpha=0.85, height=0.5)
+        for bar, m, s in zip(bars, means, stds):
+            ax.text(m + (s or 0) + 0.01 * max(means or [1]),
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{m:.2f}", va="center", fontsize=8)
+        ax.set_yticks(y)
+        ax.set_yticklabels(sig_labels, fontsize=9)
+        ax.set_xlabel(xlabel, fontsize=10)
+        ax.set_title(xlabel, fontsize=11)
+        ax.grid(axis="x", alpha=0.3)
+
+    fig.suptitle("Switching Signal Ablation (mean ± std over all datasets × seeds)", fontsize=13)
+    plt.tight_layout()
+    if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
+        plt.savefig(os.path.join(save_dir_path, "signal_comparison.png"), dpi=dpi)
+    plt.show()
+
+
+def plot_sampler_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                             save_dir_path: str = None):
+    """
+    2×2 subplot grid comparing all four metrics per strategy across acquisition samplers.
+    """
+    strategies = _COMPARISON_STRATEGIES
+    samplers   = sorted(experiments_df["sampler"].dropna().unique()
+                        ) if "sampler" in experiments_df.columns else []
+    n_s  = len(strategies)
+    n_sp = len(samplers)
+    width = 0.7 / max(n_sp, 1)
+    x = np.arange(n_s)
+
+    fig, axes = plt.subplots(2, 2, figsize=(max(10, n_s * 2.5), 9))
+    axes = axes.flatten()
+
+    for ax_i, (col, ylabel, scale, _) in enumerate(_METRICS):
+        ax = axes[ax_i]
+        for i, sampler in enumerate(samplers):
+            means, stds = [], []
+            for strat in strategies:
+                kwargs = dict(strategy=strat, sampler=sampler)
+                if strat == "DeltaF1Strategy":
+                    kwargs.update({k: v for k, v in hybrid_hyper.items() if k in ("epsilon", "k")})
+                sub = filter_experiments_df(experiments_df, **kwargs)
+                m, s = _metric_stats(sub)[col]
+                means.append(m); stds.append(s)
+            offset = (i - n_sp / 2 + 0.5) * width
+            color  = _SAMPLER_COLORS.get(sampler, f"C{i}")
+            label  = _SAMPLER_DISPLAY.get(sampler, sampler)
+            ax.bar(x + offset, means, width, yerr=stds, capsize=4,
+                   label=label, color=color, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels([strategy_names.get(s, s) for s in strategies], fontsize=9, rotation=10)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(ylabel, fontsize=11)
+        ax.grid(axis="y", alpha=0.3)
+        if ax_i == 0:
+            ax.legend(fontsize=8)
+
+    fig.suptitle("Sampler Ablation (mean ± std over all datasets × seeds)", fontsize=13)
+    plt.tight_layout()
+    if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
+        plt.savefig(os.path.join(save_dir_path, "sampler_comparison.png"), dpi=dpi)
+    plt.show()
+
+
+def plot_fixed_switch_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                                  save_dir_path: str = None):
+    """
+    2×2 subplot grid comparing HybridAL vs FixedSwitch baselines across all four metrics.
+    HybridAL bar is highlighted in red; fixed-switch bars in gray.
+    """
+    hybrid_sub = filter_experiments_df(experiments_df, strategy="DeltaF1Strategy",
+                                        **{k: v for k, v in hybrid_hyper.items()
+                                           if k in ("epsilon", "k")})
+    fixed_rows = experiments_df[experiments_df["strategy"] == "FixedSwitchStrategy"].copy()
+    sr_col = next((c for c in fixed_rows.columns if "switch_round" in c.lower()), None)
+
+    bar_labels = ["HybridAL\n(adaptive)"]
+    bar_colors = ["#E53935"]
+    bar_subs   = [hybrid_sub]
+
+    if sr_col and not fixed_rows.empty:
+        for sr in sorted(fixed_rows[sr_col].dropna().unique()):
+            bar_labels.append(f"Fixed\n@ r{int(sr)}")
+            bar_colors.append("#757575")
+            bar_subs.append(fixed_rows[fixed_rows[sr_col] == sr])
+
+    x = np.arange(len(bar_labels))
+    fig, axes = plt.subplots(2, 2, figsize=(max(7, len(bar_labels) * 1.6), 9))
+    axes = axes.flatten()
+
+    for ax_i, (col, ylabel, scale, _) in enumerate(_METRICS):
+        ax = axes[ax_i]
+        means = [_metric_stats(s)[col][0] for s in bar_subs]
+        stds  = [_metric_stats(s)[col][1] for s in bar_subs]
+        bars  = ax.bar(x, means, yerr=stds, capsize=5, color=bar_colors, alpha=0.85, width=0.6)
+        for bar, m in zip(bars, means):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01 * max(means or [1]),
+                    f"{m:.2f}", ha="center", va="bottom", fontsize=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(bar_labels, fontsize=9)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(ylabel, fontsize=11)
+        ax.grid(axis="y", alpha=0.3)
+
+    fig.suptitle("Adaptive vs Fixed-Switch Baselines (mean ± std over all datasets × seeds)",
+                 fontsize=13)
+    plt.tight_layout()
+    if save_dir_path:
+        os.makedirs(save_dir_path, exist_ok=True)
+        plt.savefig(os.path.join(save_dir_path, "fixed_switch_comparison.png"), dpi=dpi)
+    plt.show()
+
+
+def plot_per_dataset_f1(experiments_df: pd.DataFrame, hybrid_hyper: dict,
+                         save_dir_path: str = None):
+    """
+    One figure per metric (4 total), each a 2×3 grid of datasets with grouped bars per strategy.
+    """
+    datasets   = [d for d in dataset_names if d in experiments_df["dataset"].unique()]
+    strategies = _COMPARISON_STRATEGIES
+    cmap       = plt.get_cmap("Set2")
+    colors     = {s: cmap(i) for i, s in enumerate(strategies)}
+    ncols, nrows = 3, int(np.ceil(len(datasets) / 3))
+
+    for col, metric_label, scale, _ in _METRICS:
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(ncols * 4.5, nrows * 4), sharey=False)
+        axes = axes.flatten()
+
+        for ax_i, dataset in enumerate(datasets):
+            ax = axes[ax_i]
+            means, stds, labels, bar_colors = [], [], [], []
+
+            for strat in strategies:
+                kwargs = dict(strategy=strat, dataset=dataset)
+                if "model" in experiments_df.columns:
+                    kwargs["model"] = "distilbert-base-uncased"
+                if strat == "DeltaF1Strategy":
+                    kwargs.update({k: v for k, v in hybrid_hyper.items() if k in ("epsilon", "k")})
+                sub = filter_experiments_df(experiments_df, **kwargs)
+                m, s = _metric_stats(sub)[col]
+                means.append(m); stds.append(s)
+                labels.append(strategy_names.get(strat, strat))
+                bar_colors.append(colors[strat])
+
+            x = np.arange(len(strategies))
+            bars = ax.bar(x, means, yerr=stds, capsize=4, color=bar_colors, alpha=0.85, width=0.6)
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, fontsize=8, rotation=15, ha="right")
+            ax.set_ylabel(metric_label, fontsize=9)
+            ax.set_title(dataset_names.get(dataset, dataset), fontsize=11, fontweight="bold")
+            ax.grid(axis="y", alpha=0.3)
+            for bar, m in zip(bars, means):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01 * max(means or [1]),
+                        f"{m:.1f}", ha="center", va="bottom", fontsize=7)
+
+        for ax_i in range(len(datasets), len(axes)):
+            axes[ax_i].set_visible(False)
+
+        safe_col = col.replace(" ", "_")
+        fig.suptitle(f"{metric_label} per Dataset: Strategy Comparison\n"
+                     "(DistilBERT, mean ± std across seeds)", fontsize=13, y=1.01)
+        plt.tight_layout()
+        if save_dir_path:
+            os.makedirs(save_dir_path, exist_ok=True)
+            plt.savefig(os.path.join(save_dir_path, f"per_dataset_{safe_col}.png"),
+                        dpi=dpi, bbox_inches="tight")
         plt.show()
 
 

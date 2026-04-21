@@ -41,8 +41,8 @@ def main():
     parser.add_argument("--dirs", nargs="+", default=["experiments"],
                         help="Experiment output directories to load (space-separated).")
     parser.add_argument("--table-mode", default="main",
-                        choices=["main", "backbones", "samplers", "fixed_switch", "signal"],
-                        help="Which table layout to build.")
+                        choices=["main", "backbones", "samplers", "fixed_switch", "signal", "all"],
+                        help="Which table layout to build. 'all' generates every table.")
     parser.add_argument("--hybrid-epsilon", type=float, default=None,
                         help="Best epsilon for DeltaF1Strategy (from Optuna step).")
     parser.add_argument("--hybrid-k", type=int, default=None,
@@ -64,10 +64,11 @@ def main():
     hyper_from_file = _load_best_hyper(args.hyper_file)
 
     hybrid_hyper = {
-        "epsilon":            args.hybrid_epsilon  or hyper_from_file.get("epsilon"),
-        "k":                  args.hybrid_k        or hyper_from_file.get("k"),
-        "validation_fraction": args.hybrid_vf      or hyper_from_file.get("validation_fraction"),
+        "epsilon": args.hybrid_epsilon or hyper_from_file.get("epsilon"),
+        "k":       args.hybrid_k       or hyper_from_file.get("k"),
     }
+    if args.hybrid_vf or hyper_from_file.get("validation_fraction"):
+        hybrid_hyper["validation_fraction"] = args.hybrid_vf or hyper_from_file.get("validation_fraction")
     # Remove None values so filter_experiments_df doesn't filter on missing keys
     hybrid_hyper = {k: v for k, v in hybrid_hyper.items() if v is not None}
 
@@ -83,6 +84,12 @@ def main():
             plot_test_f1_bar_chart,
             plot_hybrid_hyper_variations,
             plot_confusion_heatmaps_hybrid,
+            plot_backbone_comparison,
+            plot_signal_comparison,
+            plot_sampler_comparison,
+            plot_fixed_switch_comparison,
+            plot_per_dataset_f1,
+            plot_training_time_comparison,
         )
     except ImportError as e:
         print(f"[generate_results] ERROR: could not import figure_plotter: {e}", file=sys.stderr)
@@ -162,6 +169,43 @@ def main():
         except Exception as e:
             print(f"  [plot] switch_heatmap: SKIPPED ({e})")
 
+        # ── Comparison plots ───────────────────────────────────────────────── #
+        try:
+            plot_backbone_comparison(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] backbone_comparison: done")
+        except Exception as e:
+            print(f"  [plot] backbone_comparison: SKIPPED ({e})")
+
+        try:
+            plot_signal_comparison(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] signal_comparison: done")
+        except Exception as e:
+            print(f"  [plot] signal_comparison: SKIPPED ({e})")
+
+        try:
+            plot_sampler_comparison(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] sampler_comparison: done")
+        except Exception as e:
+            print(f"  [plot] sampler_comparison: SKIPPED ({e})")
+
+        try:
+            plot_fixed_switch_comparison(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] fixed_switch_comparison: done")
+        except Exception as e:
+            print(f"  [plot] fixed_switch_comparison: SKIPPED ({e})")
+
+        try:
+            plot_per_dataset_f1(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] per_dataset_f1: done")
+        except Exception as e:
+            print(f"  [plot] per_dataset_f1: SKIPPED ({e})")
+
+        try:
+            plot_training_time_comparison(df, hybrid_hyper, save_dir_path=str(out))
+            print("  [plot] training_time_comparison: done")
+        except Exception as e:
+            print(f"  [plot] training_time_comparison: SKIPPED ({e})")
+
         # Significance table (printed, not a plot)
         if hybrid_hyper:
             try:
@@ -176,25 +220,28 @@ def main():
 
     # ── LaTeX table ───────────────────────────────────────────────────────── #
     if not args.skip_table:
-        tex_path = out / f"table_{args.table_mode}.tex"
-        print(f"\n[generate_results] Generating LaTeX table ({args.table_mode}) → {tex_path}")
-        try:
-            latex = generate_latex_table(
-                df,
-                hybrid_hyper=hybrid_hyper,
-                table_mode=args.table_mode,
-                output_path=str(tex_path),
-            )
-            print(f"  Saved: {tex_path}")
-            print("\n" + "=" * 70)
-            print("LaTeX source:")
-            print("=" * 70)
-            print(latex)
-            print("=" * 70)
-        except Exception as e:
-            print(f"  [latex] ERROR: {e}")
-            import traceback
-            traceback.print_exc()
+        modes = ["main", "backbones", "samplers", "fixed_switch", "signal"] \
+                if args.table_mode == "all" else [args.table_mode]
+        for mode in modes:
+            tex_path = out / f"table_{mode}.tex"
+            print(f"\n[generate_results] Generating LaTeX table ({mode}) → {tex_path}")
+            try:
+                latex = generate_latex_table(
+                    df,
+                    hybrid_hyper=hybrid_hyper,
+                    table_mode=mode,
+                    output_path=str(tex_path),
+                )
+                print(f"  Saved: {tex_path}")
+                print("\n" + "=" * 70)
+                print(f"LaTeX source ({mode}):")
+                print("=" * 70)
+                print(latex)
+                print("=" * 70)
+            except Exception as e:
+                print(f"  [latex] ERROR ({mode}): {e}")
+                import traceback
+                traceback.print_exc()
 
     print("\n[generate_results] Done.")
 

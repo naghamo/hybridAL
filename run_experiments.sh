@@ -40,7 +40,7 @@ set -e   # stop on first error
 echo "============================================================"
 echo " STEP 1 — Baselines (Retrain / FineTune / NewOnly)"
 echo "============================================================"
-python experimentation.py --mode baselines --force
+python experimentation.py --mode baselines #--force
 
 echo "--- Generating plots and table for Step 1 ---"
 python generate_results.py \
@@ -108,14 +108,12 @@ echo "============================================================"
 # Read best hyperparams from JSON written by Step 2
 EPSILON=$(python -c "import json; d=json.load(open('best_hyperparams.json')); print(d['epsilon'])")
 K=$(python -c "import json; d=json.load(open('best_hyperparams.json')); print(d['k'])")
-VF=$(python -c "import json; d=json.load(open('best_hyperparams.json')); print(d['validation_fraction'])")
 
-echo "Using best hyperparams: epsilon=${EPSILON}  k=${K}  validation_fraction=${VF}"
+echo "Using best hyperparams: epsilon=${EPSILON}  k=${K}"
 
 python experimentation.py --mode signal_ablation --force \
     --best-epsilon "${EPSILON}" \
-    --best-k "${K}" \
-    --best-validation-fraction "${VF}"
+    --best-k "${K}"
 
 echo "--- Generating plots and table for Step 6 ---"
 python generate_results.py \

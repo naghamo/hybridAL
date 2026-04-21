@@ -88,6 +88,18 @@ MODES = {
         save_dir="./experiments/quick",
     ),
 
+    # ── Subset-size sensitivity: finds stable subset size for entropy sampling #
+    "subset_sensitivity": dict(
+        datasets=["imdb", "sst2"],
+        strategies=["RetrainStrategy", "FineTuneStrategy"],
+        models=["distilbert-base-uncased"],
+        samplers=["EntropyOnRandomSubsetSampler"],
+        seeds=[42, 43, 44],
+        total_rounds=10,
+        ablation_signals=["delta_f1"],
+        save_dir="./experiments/subset_sensitivity",
+    ),
+
     # ── All non-Optuna strategies: run these first ───────────────────────── #
     "baselines": dict(
         datasets=ALL_DATASETS,
@@ -112,7 +124,7 @@ MODES = {
     # ── Backbone ablation: BERT + RoBERTa ────────────────────────────────── #
     "backbones": dict(
         datasets=ALL_DATASETS,
-        strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
+        strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"],
         models=ALL_MODELS,
         samplers=["EntropyOnRandomSubsetSampler"],
         seeds=[42, 43, 44, 45, 46],
@@ -123,7 +135,7 @@ MODES = {
     # ── Sampler ablation: Random + BADGE ─────────────────────────────────── #
     "samplers": dict(
         datasets=ALL_DATASETS,
-        strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
+        strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"],
         models=["distilbert-base-uncased"],
         samplers=ALL_SAMPLERS,
         seeds=[42, 43, 44, 45, 46],
@@ -209,14 +221,12 @@ def _run_single(config_parameters):
 
 def objective(trial, strategy, data_sets, seeds, common_config_parameters,
               start_time=0):
-    """Optuna objective: searches epsilon, k, validation_fraction for DeltaF1Strategy."""
-    validation_fraction = trial.suggest_categorical("validation_fraction", [0.02, 0.05, 0.1, 0.2])
-    epsilon             = trial.suggest_categorical("epsilon",             [0.05, 0.02, 0.01, 0.005])
-    k                   = trial.suggest_categorical("k",                   [3, 5, 7, 10])
+    """Optuna objective: searches epsilon and k for DeltaF1Strategy."""
+    epsilon = trial.suggest_categorical("epsilon", [0.05, 0.02, 0.01, 0.005])
+    k       = trial.suggest_categorical("k",       [3, 5, 7, 10])
 
     signal = common_config_parameters.get("_ablation_signal", "delta_f1")
     strat_kwargs = {
-        "validation_fraction": validation_fraction,
         "epsilon": epsilon,
         "k": k,
         "signal": signal,
@@ -229,12 +239,12 @@ def objective(trial, strategy, data_sets, seeds, common_config_parameters,
     for data_set in data_sets:
         for seed in seeds:
             logging.info(
-                f"[Optuna] vf={validation_fraction}, eps={epsilon}, k={k} | "
+                f"[Optuna] eps={epsilon}, k={k} | "
                 f"{data_set} seed={seed} | "
                 f"elapsed {(time.perf_counter()-start_time)/HOURS:.2f}h"
             )
             experiment_name = (
-                f"{strategy}_{signal}_{validation_fraction}_{epsilon}_{k}_"
+                f"{strategy}_{signal}_{epsilon}_{k}_"
                 f"{sampler_name}_{mslug}_{data_set}_{seed}"
             )
 
@@ -304,6 +314,10 @@ def parse_args():
     parser.add_argument("--initial-pool-size",      type=int,   default=200)
     parser.add_argument("--acquisition-batch-size", type=int,   default=32)
     parser.add_argument("--total-rounds",           type=int,   default=None)
+    parser.add_argument("--optuna-rounds",          type=int,   default=15,
+                        help="Rounds per trial during Optuna search (fewer = faster trials). Final eval uses --total-rounds.")
+    parser.add_argument("--optuna-trials",          type=int,   default=50,
+                        help="Number of Optuna trials. 50 covers all 16 combos ~3x (~20h). Overrides --optuna-hours if set.")
     parser.add_argument("--max-seconds",            type=int,   default=None)
 
     # ── Plateau ───────────────────────────────────────────────────────────── #
@@ -312,7 +326,7 @@ def parse_args():
     parser.add_argument("--plateau-f1-threshold",      type=float, default=0.0005)
 
     # ── Sampling ──────────────────────────────────────────────────────────── #
-    parser.add_argument("--random-subset-size", type=int, default=1000)
+    parser.add_argument("--random-subset-size", type=int, default=5000)
 
     # ── Scheduler ─────────────────────────────────────────────────────────── #
     parser.add_argument("--scheduler-step-size", type=int,   default=10)
@@ -436,8 +450,8 @@ def build_experiment_list(args, save_dir: Path):
                                 continue  # skip — no hyperparams to enumerate
                             for data_set, seed in itertools.product(args.datasets, args.seeds):
                                 name = (
-                                    f"DeltaF1Strategy_{signal}_{args.best_epsilon}_{args.best_k}_"
-                                    f"{args.best_validation_fraction}_{sampler_name}_{mslug}_{data_set}_{seed}"
+                                    f"Delta_{signal}_{args.best_epsilon}_{args.best_k}_"
+                                    f"{sampler_name}_{mslug}_{data_set}_{seed}"
                                 )
                                 cfg = {**common,
                                        "experiment_name": name,
@@ -446,10 +460,9 @@ def build_experiment_list(args, save_dir: Path):
                                        "num_labels":      DATASET_NUM_LABELS[data_set],
                                        "strategy_class":  strategy,
                                        "strategy_kwargs": {
-                                           "signal":              signal,
-                                           "epsilon":             args.best_epsilon,
-                                           "k":                   args.best_k,
-                                           "validation_fraction": args.best_validation_fraction,
+                                           "signal":  signal,
+                                           "epsilon": args.best_epsilon,
+                                           "k":       args.best_k,
                                        },
                                        "sampler_kwargs": {**sampler_kwargs_base, "seed": seed}}
                                 experiments.append({"name": name, "strategy": "DeltaF1Ablation", "config": cfg})
@@ -560,7 +573,7 @@ if __name__ == "__main__":
         except Exception as exc:
             logging.error(f"FAILED: {e['name']} — {exc}", exc_info=True)
 
-    # ── Optuna runs (DeltaF1Strategy, delta_f1 signal) ───────────────────── #
+    # ── Grid search (DeltaF1Strategy, delta_f1 signal) ──────────────────── #
     for e in optuna_runs:
         done_count += 1
         common_cfg = e["config"].copy()
@@ -569,44 +582,115 @@ if __name__ == "__main__":
         sampler_n  = common_cfg.get("sampler_class", "sampler")
 
         logging.info(
-            f"\n[{done_count}/{total_to_run}] Optuna DeltaF1Strategy "
+            f"\n[{done_count}/{total_to_run}] Grid search DeltaF1Strategy "
             f"signal={signal} model={mslug_val} sampler={sampler_n}"
         )
 
-        optuna_seeds = args.seeds[:3]  # use 3 seeds for Optuna to keep each trial ~3h; full 5-seed eval runs separately
-        study = optuna.create_study(direction="maximize")
-        study.optimize(
-            lambda trial: objective(
-                trial, "DeltaF1Strategy",
-                args.datasets, optuna_seeds,
-                common_cfg, start_time,
-            ),
-            timeout=int(args.optuna_hours * HOURS),
-        )
-        logging.info(
-            f"Best params: {study.best_params}  Avg F1={study.best_value:.4f}"
-        )
+        tune_seeds    = args.seeds[:3]          # 3 seeds for tuning
+        tune_datasets = ["imdb", "agnews"]      # 2 representative datasets
+        tune_cfg      = {**common_cfg, "total_rounds": args.optuna_rounds}
+        sampler_kwargs_base = common_cfg.get("sampler_kwargs", {})
+
+        epsilons = [0.05, 0.02, 0.01, 0.005]
+        ks       = [3, 5, 7, 10]
+        grid_results = {}  # (epsilon, k) -> avg f1
+
+        import glob as _glob
+
+        def _load_existing_f1(exp_dir: Path):
+            """Return f1_score from an existing result JSON, or None if not found."""
+            jsons = sorted(_glob.glob(str(exp_dir / "*.json")))
+            for jf in reversed(jsons):
+                try:
+                    d = json.load(open(jf))
+                    f1 = d.get("final_test_stats", {}).get("f1_score")
+                    if f1 is not None:
+                        return f1
+                except Exception:
+                    continue
+            return None
+
+        total_combos = len(epsilons) * len(ks)
+        combo_count  = 0
+        for epsilon, k in itertools.product(epsilons, ks):
+            combo_count += 1
+            logging.info(f"  Grid [{combo_count}/{total_combos}] epsilon={epsilon} k={k}")
+            f1_scores = []
+            for data_set, seed in itertools.product(tune_datasets, tune_seeds):
+                name = (
+                    f"DeltaF1Strategy_{signal}_{epsilon}_{k}_"
+                    f"{sampler_n}_{mslug_val}_{data_set}_{seed}"
+                )
+                exp_dir = save_dir / name
+                existing_f1 = _load_existing_f1(exp_dir)
+                if existing_f1 is not None:
+                    logging.info(f"    Skipping (exists): {name}  f1={existing_f1:.4f}")
+                    f1_scores.append(existing_f1)
+                    continue
+                cfg = {k_: v for k_, v in tune_cfg.items() if not k_.startswith("_")}
+                cfg.update({
+                    "experiment_name": name,
+                    "data":            data_set,
+                    "seed":            seed,
+                    "num_labels":      DATASET_NUM_LABELS[data_set],
+                    "strategy_class":  "DeltaF1Strategy",
+                    "strategy_kwargs": {"epsilon": epsilon, "k": k, "signal": signal},
+                    "sampler_kwargs":  {**sampler_kwargs_base, "seed": seed},
+                })
+                try:
+                    metrics = _run_single(cfg)
+                    f1_scores.append(metrics["f1_score"])
+                except Exception as exc:
+                    logging.error(f"FAILED: {name} — {exc}", exc_info=True)
+            grid_results[(epsilon, k)] = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
+            logging.info(f"    avg F1 = {grid_results[(epsilon, k)]:.4f}")
+
+        best_epsilon, best_k = max(grid_results, key=grid_results.get)
+        best_avg_f1 = grid_results[(best_epsilon, best_k)]
+        logging.info(f"Best: epsilon={best_epsilon} k={best_k} avg_F1={best_avg_f1:.4f}")
         print(
             f"\n{'='*60}\n"
             f"  BEST HYPERPARAMS (DeltaF1Strategy, signal={signal},\n"
             f"  model={mslug_val}, sampler={sampler_n}):\n"
-            f"    --best-epsilon              {study.best_params.get('epsilon')}\n"
-            f"    --best-k                    {study.best_params.get('k')}\n"
-            f"    --best-validation-fraction  {study.best_params.get('validation_fraction')}\n"
-            f"  Avg F1 = {study.best_value:.4f}\n"
+            f"    --best-epsilon  {best_epsilon}\n"
+            f"    --best-k        {best_k}\n"
+            f"  Avg F1 = {best_avg_f1:.4f}\n"
             f"{'='*60}\n"
         )
-        # Auto-save best hyperparams so run_experiments.sh / generate_results.py can read them
-        _hyper_out = {
-            "epsilon":             study.best_params.get("epsilon"),
-            "k":                   study.best_params.get("k"),
-            "validation_fraction": study.best_params.get("validation_fraction"),
-            "avg_f1":              study.best_value,
-        }
+
         import json as _json
         with open("best_hyperparams.json", "w") as _hf:
-            _json.dump(_hyper_out, _hf, indent=2)
-        logging.info(f"Best hyperparams saved to best_hyperparams.json")
+            _json.dump({"epsilon": best_epsilon, "k": best_k, "avg_f1": best_avg_f1}, _hf, indent=2)
+        logging.info("Best hyperparams saved to best_hyperparams.json")
+
+        # ── Final evaluation: best hyperparams on all 6 datasets × 5 seeds ── #
+        logging.info("Running final evaluation with best hyperparams on all datasets and seeds...")
+        best_strat_kwargs = {"epsilon": best_epsilon, "k": best_k, "signal": signal}
+        for data_set, seed in itertools.product(args.datasets, args.seeds):
+            final_name = (
+                f"DeltaF1Strategy_{signal}_{best_epsilon}_{best_k}_"
+                f"{sampler_n}_{mslug_val}_{data_set}_{seed}"
+            )
+            exp_dir = save_dir / final_name
+            if _load_existing_f1(exp_dir) is not None:
+                logging.info(f"Final eval skipping (exists): {final_name}")
+                continue
+            final_cfg = {k_: v for k_, v in common_cfg.items() if not k_.startswith("_")}
+            final_cfg.update({
+                "experiment_name": final_name,
+                "data":            data_set,
+                "seed":            seed,
+                "num_labels":      DATASET_NUM_LABELS[data_set],
+                "strategy_class":  "DeltaF1Strategy",
+                "strategy_kwargs": best_strat_kwargs,
+                "sampler_kwargs":  {**sampler_kwargs_base, "seed": seed},
+            })
+            logging.info(f"Final eval: {final_name}")
+            try:
+                metrics = _run_single(final_cfg)
+                _log_final(final_name, metrics)
+            except Exception as exc:
+                logging.error(f"FAILED: {final_name} — {exc}", exc_info=True)
 
     elapsed = (time.perf_counter() - start_time) / HOURS
     logging.info(f"All experiments complete. Total elapsed: {elapsed:.2f}h")

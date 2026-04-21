@@ -51,7 +51,11 @@ class NewOnlyStrategy(BaseStrategy):
                   and new_samples.
         """
         if not new_indices:
-            return self.get_stats(0, 0, pool.get_subset([]), [])
+            # Initial round: train on the full labeled pool (same as other strategies)
+            labeled_subset = pool.get_labeled_subset()
+            dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
+            total_loss, num_batches = self.train_epochs(dataloader)
+            return self.get_stats(total_loss, num_batches, labeled_subset, [])
 
         pool.add_labeled_samples(new_indices)
 
