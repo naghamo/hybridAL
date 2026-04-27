@@ -25,9 +25,8 @@ Step 5 — New datasets (SST-2, TweetEval, Yahoo Answers):
 Step 6 — Fixed-switch baselines:
     python experimentation.py --mode fixed_switch
 
-Step 7 — Signal ablation (after Step 2, fill in best hyperparams):
-    python experimentation.py --mode signal_ablation \\
-        --best-epsilon 0.01 --best-k 4 --best-validation-fraction 0.1
+Step 7 — Signal ablation:
+    python experimentation.py --mode signal_ablation
 
 Quick smoke test (fast, ~5 rounds each):
     python experimentation.py --mode quick
@@ -70,6 +69,27 @@ ALL_DATASETS      = ORIGINAL_DATASETS + NEW_DATASETS
 
 ALL_MODELS   = ["distilbert-base-uncased", "bert-base-uncased", "roberta-base"]
 ALL_SAMPLERS = ["EntropyOnRandomSubsetSampler", "RandomSampler", "BADGESampler"]
+ALL_HYBRID_SIGNALS = [
+    "delta_f1",
+    "delta_loss",
+    "delta_accuracy",
+    "gradient_norm",
+    "spectral_alpha",
+    "nc1_ratio",
+    "cka",
+    "l2_weight_distance",
+]
+HYBRID_EPSILON_SEARCH_SPACES = {
+    "delta_f1": [0.05, 0.02, 0.01, 0.005],
+    "delta_loss": [0.1, 0.05, 0.02, 0.01, 0.005],
+    "delta_accuracy": [0.05, 0.02, 0.01, 0.005],
+    "gradient_norm": [5.0, 2.0, 1.0, 0.5, 0.1],
+    "spectral_alpha": [0.5, 0.2, 0.1, 0.05, 0.02],
+    "nc1_ratio": [5.0, 2.0, 1.0, 0.5, 0.1],
+    "cka": [0.1, 0.05, 0.02, 0.01, 0.005],
+    "l2_weight_distance": [5.0, 2.0, 1.0, 0.5, 0.1],
+}
+HYBRID_K_SEARCH_SPACE = [3, 5, 7, 10]
 
 # --------------------------------------------------------------------------- #
 # Experiment modes — each entry overrides specific arg defaults                #
@@ -117,7 +137,7 @@ MODES = {
         models=["distilbert-base-uncased"],
         samplers=["EntropyOnRandomSubsetSampler"],
         seeds=[42, 43, 44, 45, 46],
-        ablation_signals=["delta_f1"],
+        ablation_signals=ALL_HYBRID_SIGNALS,
         save_dir="./experiments/hybrid",
     ),
 
@@ -128,7 +148,7 @@ MODES = {
         models=ALL_MODELS,
         samplers=["EntropyOnRandomSubsetSampler"],
         seeds=[42, 43, 44, 45, 46],
-        ablation_signals=["delta_f1"],
+        ablation_signals=ALL_HYBRID_SIGNALS,
         save_dir="./experiments/backbones",
     ),
 
@@ -139,7 +159,7 @@ MODES = {
         models=["distilbert-base-uncased"],
         samplers=ALL_SAMPLERS,
         seeds=[42, 43, 44, 45, 46],
-        ablation_signals=["delta_f1"],
+        ablation_signals=ALL_HYBRID_SIGNALS,
         save_dir="./experiments/samplers",
     ),
 
@@ -154,14 +174,14 @@ MODES = {
         save_dir="./experiments/fixed_switch",
     ),
 
-    # ── Signal ablation: requires --best-* flags ─────────────────────────── #
+    # ── Signal ablation: auto-tunes all non-default hybrid signals ───────── #
     "signal_ablation": dict(
         datasets=ALL_DATASETS,
         strategies=["DeltaF1Strategy"],
         models=["distilbert-base-uncased"],
         samplers=["EntropyOnRandomSubsetSampler"],
         seeds=[42, 43, 44, 45, 46],
-        ablation_signals=["delta_loss", "delta_accuracy", "gradient_norm"],
+        ablation_signals=[signal for signal in ALL_HYBRID_SIGNALS if signal != "delta_f1"],
         save_dir="./experiments/signal_ablation",
     ),
 
@@ -173,7 +193,7 @@ MODES = {
         models=ALL_MODELS,
         samplers=ALL_SAMPLERS,
         seeds=[42, 43, 44, 45, 46],
-        ablation_signals=["delta_f1"],
+        ablation_signals=ALL_HYBRID_SIGNALS,
         fixed_switch_rounds=[3, 5, 7, 10],
         save_dir="./experiments/full",
     ),
@@ -194,6 +214,13 @@ def get_sampler_kwargs(sampler_name: str, args) -> dict:
     if sampler_name in ("EntropyOnRandomSubsetSampler", "BADGESampler"):
         return {"random_subset_size": args.random_subset_size}
     return {}
+
+
+def get_hybrid_search_space(signal: str) -> tuple[list[float], list[int]]:
+    """Return the epsilon and k grids for a given hybrid signal."""
+    if signal not in HYBRID_EPSILON_SEARCH_SPACES:
+        raise ValueError(f"Unknown hybrid signal '{signal}'")
+    return HYBRID_EPSILON_SEARCH_SPACES[signal], HYBRID_K_SEARCH_SPACE
 
 
 def _log_final(experiment_name, metrics):
@@ -222,10 +249,11 @@ def _run_single(config_parameters):
 def objective(trial, strategy, data_sets, seeds, common_config_parameters,
               start_time=0):
     """Optuna objective: searches epsilon and k for DeltaF1Strategy."""
-    epsilon = trial.suggest_categorical("epsilon", [0.05, 0.02, 0.01, 0.005])
-    k       = trial.suggest_categorical("k",       [3, 5, 7, 10])
-
     signal = common_config_parameters.get("_ablation_signal", "delta_f1")
+    epsilon_grid, k_grid = get_hybrid_search_space(signal)
+    epsilon = trial.suggest_categorical("epsilon", epsilon_grid)
+    k       = trial.suggest_categorical("k", k_grid)
+
     strat_kwargs = {
         "epsilon": epsilon,
         "k": k,
@@ -341,11 +369,14 @@ def parse_args():
     # ── Signal ablation ────────────────────────────────────────────────────── #
     parser.add_argument(
         "--ablation-signals", nargs="+", default=None,
-        help="Signals for DeltaF1Strategy. delta_f1 uses Optuna; others need --best-* flags.",
+        help="Signals for DeltaF1Strategy. Each selected signal is tuned with a signal-specific epsilon grid.",
     )
-    parser.add_argument("--best-epsilon",              type=float, default=None)
-    parser.add_argument("--best-k",                    type=int,   default=None)
-    parser.add_argument("--best-validation-fraction",  type=float, default=None)
+    parser.add_argument("--best-epsilon",              type=float, default=None,
+                        help="Deprecated manual override; tuning is now automatic for all hybrid signals.")
+    parser.add_argument("--best-k",                    type=int,   default=None,
+                        help="Deprecated manual override; tuning is now automatic for all hybrid signals.")
+    parser.add_argument("--best-validation-fraction",  type=float, default=None,
+                        help="Unused legacy flag retained for CLI compatibility.")
 
     args = parser.parse_args()
 
@@ -369,7 +400,7 @@ def parse_args():
     if args.max_seconds       is None: args.max_seconds       = 2400
     if args.optuna_hours      is None: args.optuna_hours      = 48
     if args.fixed_switch_rounds is None: args.fixed_switch_rounds = [3, 5, 7, 10]
-    if args.ablation_signals  is None: args.ablation_signals  = ["delta_f1"]
+    if args.ablation_signals  is None: args.ablation_signals  = ALL_HYBRID_SIGNALS
 
     return args
 
@@ -444,35 +475,11 @@ def build_experiment_list(args, save_dir: Path):
 
                 elif strategy == "DeltaF1Strategy":
                     for signal in args.ablation_signals:
-                        if signal != "delta_f1":
-                            # These will be direct runs (no Optuna)
-                            if args.best_epsilon is None:
-                                continue  # skip — no hyperparams to enumerate
-                            for data_set, seed in itertools.product(args.datasets, args.seeds):
-                                name = (
-                                    f"Delta_{signal}_{args.best_epsilon}_{args.best_k}_"
-                                    f"{sampler_name}_{mslug}_{data_set}_{seed}"
-                                )
-                                cfg = {**common,
-                                       "experiment_name": name,
-                                       "data":            data_set,
-                                       "seed":            seed,
-                                       "num_labels":      DATASET_NUM_LABELS[data_set],
-                                       "strategy_class":  strategy,
-                                       "strategy_kwargs": {
-                                           "signal":  signal,
-                                           "epsilon": args.best_epsilon,
-                                           "k":       args.best_k,
-                                       },
-                                       "sampler_kwargs": {**sampler_kwargs_base, "seed": seed}}
-                                experiments.append({"name": name, "strategy": "DeltaF1Ablation", "config": cfg})
-                        else:
-                            # delta_f1 runs through Optuna — represent as a single placeholder
-                            experiments.append({
-                                "name":     f"[Optuna] DeltaF1Strategy_{sampler_name}_{mslug}_({'|'.join(args.datasets)})",
-                                "strategy": "DeltaF1Strategy_Optuna",
-                                "config":   {**common, "_ablation_signal": "delta_f1"},
-                            })
+                        experiments.append({
+                            "name":     f"[Tune] DeltaF1Strategy_{signal}_{sampler_name}_{mslug}_({'|'.join(args.datasets)})",
+                            "strategy": "DeltaF1Strategy_Optuna",
+                            "config":   {**common, "_ablation_signal": signal},
+                        })
 
                 else:
                     for data_set, seed in itertools.product(args.datasets, args.seeds):
@@ -539,15 +546,15 @@ if __name__ == "__main__":
 
     print(f"\nDirect experiments : {len(direct_runs):4d} total  "
           f"({len(existing)} already done, {len(pending)} to run)")
-    print(f"Optuna runs        : {len(optuna_runs):4d}  "
-          f"(each runs until --optuna-hours={args.optuna_hours}h timeout)")
+    print(f"Tuning runs        : {len(optuna_runs):4d}  "
+          f"(one per hybrid signal/model/sampler combination)")
 
     if args.dry_run:
         print("\n── Pending direct experiments ──")
         for i, e in enumerate(pending, 1):
             print(f"  {i:4d}. [{e['strategy']:30s}] {e['name']}")
         if optuna_runs:
-            print("\n── Optuna runs ──")
+            print("\n── Tuning runs ──")
             for e in optuna_runs:
                 print(f"        {e['name']}")
         print("\nDry run complete. Nothing was executed.")
@@ -573,7 +580,7 @@ if __name__ == "__main__":
         except Exception as exc:
             logging.error(f"FAILED: {e['name']} — {exc}", exc_info=True)
 
-    # ── Grid search (DeltaF1Strategy, delta_f1 signal) ──────────────────── #
+    # ── Grid search (DeltaF1Strategy, signal-specific epsilon grids) ────── #
     for e in optuna_runs:
         done_count += 1
         common_cfg = e["config"].copy()
@@ -591,8 +598,7 @@ if __name__ == "__main__":
         tune_cfg      = {**common_cfg, "total_rounds": args.optuna_rounds}
         sampler_kwargs_base = common_cfg.get("sampler_kwargs", {})
 
-        epsilons = [0.05, 0.02, 0.01, 0.005]
-        ks       = [3, 5, 7, 10]
+        epsilons, ks = get_hybrid_search_space(signal)
         grid_results = {}  # (epsilon, k) -> avg f1
 
         import glob as _glob
@@ -659,9 +665,14 @@ if __name__ == "__main__":
         )
 
         import json as _json
-        with open("best_hyperparams.json", "w") as _hf:
-            _json.dump({"epsilon": best_epsilon, "k": best_k, "avg_f1": best_avg_f1}, _hf, indent=2)
-        logging.info("Best hyperparams saved to best_hyperparams.json")
+        best_hparams_path = save_dir / f"best_hyperparams_{signal}_{sampler_n}_{mslug_val}.json"
+        with open(best_hparams_path, "w") as _hf:
+            _json.dump(
+                {"signal": signal, "epsilon": best_epsilon, "k": best_k, "avg_f1": best_avg_f1},
+                _hf,
+                indent=2,
+            )
+        logging.info("Best hyperparams saved to %s", best_hparams_path)
 
         # ── Final evaluation: best hyperparams on all 6 datasets × 5 seeds ── #
         logging.info("Running final evaluation with best hyperparams on all datasets and seeds...")

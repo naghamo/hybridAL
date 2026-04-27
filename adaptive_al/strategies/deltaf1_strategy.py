@@ -10,6 +10,10 @@ The monitoring signal is configurable via the `signal` parameter:
   - "delta_loss"     : change in validation loss (negated so larger = better)
   - "delta_accuracy" : change in validation accuracy
   - "gradient_norm"  : L2 norm of parameter gradients on the validation set
+  - "spectral_alpha" : WeightWatcher-based spectral alpha
+  - "nc1_ratio"      : neural-collapse NC1 ratio
+  - "cka"            : centered kernel alignment to previous round
+  - "l2_weight_distance" : L2 distance from the initial model weights
 """
 
 from typing import List, Dict, Any, Optional
@@ -56,7 +60,8 @@ class DeltaF1Strategy(BaseStrategy):
                             for k consecutive rounds, switch to fine-tuning.
             k (int): Number of consecutive rounds below epsilon before switching.
             signal (str): Monitoring signal to use. One of "delta_f1" (default),
-                         "delta_loss", "delta_accuracy", "gradient_norm".
+                         "delta_loss", "delta_accuracy", "gradient_norm",
+                         "spectral_alpha", "nc1_ratio", "cka", "l2_weight_distance".
             **kwargs: Additional arguments passed to BaseStrategy.
         """
         super().__init__(**kwargs)
@@ -93,12 +98,25 @@ class DeltaF1Strategy(BaseStrategy):
                 return -stats['loss']
             else:
                 return stats['accuracy']
+        elif self.signal in ("spectral_alpha", "nc1_ratio", "cka", "l2_weight_distance"):
+            stats = evaluate_model(
+                self.model,
+                self.criterion,
+                self.batch_size,
+                val_dataset,
+                self.device,
+                include_advanced_metrics=True,
+                update_advanced_metric_state=False,
+            )
+            return stats[self.signal]
         elif self.signal == "gradient_norm":
             return self._calc_gradient_norm(val_dataset)
         else:
             raise ValueError(
                 f"Unknown signal '{self.signal}'. "
-                "Choose from: 'delta_f1', 'delta_loss', 'delta_accuracy', 'gradient_norm'."
+                "Choose from: 'delta_f1', 'delta_loss', 'delta_accuracy', "
+                "'gradient_norm', 'spectral_alpha', 'nc1_ratio', 'cka', "
+                "'l2_weight_distance'."
             )
 
     def _calc_gradient_norm(self, val_dataset) -> float:
@@ -164,8 +182,16 @@ class DeltaF1Strategy(BaseStrategy):
         else:
             self.count = 0
 
-        signal_label = {"delta_f1": "ΔF1", "delta_loss": "ΔLoss",
-                        "delta_accuracy": "ΔAcc", "gradient_norm": "GradNorm"}.get(self.signal, self.signal)
+        signal_label = {
+            "delta_f1": "ΔF1",
+            "delta_loss": "ΔLoss",
+            "delta_accuracy": "ΔAcc",
+            "gradient_norm": "GradNorm",
+            "spectral_alpha": "Alpha",
+            "nc1_ratio": "NC1",
+            "cka": "CKA",
+            "l2_weight_distance": "dW",
+        }.get(self.signal, self.signal)
         delta_str = f"{delta:+.6f}" if self.prev_signal is not None else "—"
 
         if self.count >= self.k and not self.switched:

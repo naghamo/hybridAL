@@ -16,6 +16,294 @@ import time
 from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader, Subset
 
+try:
+    import weightwatcher as ww
+except ImportError:  # pragma: no cover - depends on runtime environment
+    ww = None
+
+
+_EVAL_STATE_ATTR = "_adaptive_al_eval_state"
+
+
+def initialize_evaluation_state(model: torch.nn.Module) -> None:
+    """
+    Cache model state needed by advanced evaluation metrics.
+
+    Stores a flattened snapshot of the initial trainable parameters so later
+    evaluations can report the L2 drift from the starting checkpoint.
+    """
+    if hasattr(model, _EVAL_STATE_ATTR):
+        return
+
+    initial_weights = _flatten_trainable_parameters(model).detach().cpu()
+    setattr(model, _EVAL_STATE_ATTR, {
+        "initial_weights": initial_weights,
+        "previous_representations": None,
+    })
+
+
+def _get_evaluation_state(model: torch.nn.Module) -> Dict[str, Optional[torch.Tensor]]:
+    initialize_evaluation_state(model)
+    return getattr(model, _EVAL_STATE_ATTR)
+
+
+def _flatten_trainable_parameters(model: torch.nn.Module) -> torch.Tensor:
+    params = [
+        parameter.detach().reshape(-1)
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    ]
+    if not params:
+        return torch.empty(0)
+    return torch.cat(params)
+
+
+def _select_metric_dataset(
+        dataset: torch.utils.data.Dataset,
+        max_samples: Optional[int]
+) -> torch.utils.data.Dataset:
+    if max_samples is None or len(dataset) <= max_samples:
+        return dataset
+    return Subset(dataset, list(range(max_samples)))
+
+
+def _run_model_forward(
+        model: torch.nn.Module,
+        inputs: Dict[str, torch.Tensor],
+        collect_hidden_states: bool = False
+):
+    if collect_hidden_states:
+        try:
+            return model(**inputs, output_hidden_states=True, return_dict=True)
+        except TypeError:
+            pass
+    return model(**inputs)
+
+
+def _extract_penultimate_representations(outputs, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+    hidden_states = getattr(outputs, "hidden_states", None)
+    if hidden_states:
+        last_hidden = hidden_states[-1]
+        if last_hidden.ndim == 3:
+            return last_hidden[:, 0, :]
+        return last_hidden.reshape(last_hidden.shape[0], -1)
+
+    logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+    return logits.reshape(logits.shape[0], -1)
+
+
+def _collect_representations(
+        model: torch.nn.Module,
+        dataset: torch.utils.data.Dataset,
+        batch_size: int,
+        device: str = "cuda"
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    all_representations, all_labels = [], []
+
+    model.eval()
+    with torch.no_grad():
+        for inputs, targets in loader:
+            inputs = {key: tensor.to(device) for key, tensor in inputs.items()}
+            outputs = _run_model_forward(model, inputs, collect_hidden_states=True)
+            representations = _extract_penultimate_representations(outputs, inputs)
+
+            all_representations.append(representations.detach().cpu())
+            all_labels.append(targets.detach().cpu())
+
+    return torch.cat(all_representations), torch.cat(all_labels)
+
+
+def calculate_spectral_alpha(
+        model: torch.nn.Module,
+        max_layers: int = 6,
+        tail_fraction: float = 0.2
+) -> float:
+    """
+    Compute spectral alpha using WeightWatcher when available.
+
+    Falls back to a local power-law tail approximation if WeightWatcher is not
+    installed in the active Python environment.
+    """
+    if ww is not None:
+        try:
+            watcher = ww.WeightWatcher(model=model, framework="pytorch")
+            details = watcher.analyze(
+                plot=False,
+                pool=True,
+                randomize=False,
+                mp_fit=False,
+                savefig=None,
+            )
+            if "alpha" in details.columns:
+                alpha_values = details["alpha"].replace([np.inf, -np.inf], np.nan).dropna()
+                if not alpha_values.empty:
+                    return float(alpha_values.tail(max_layers).mean())
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logging.warning("WeightWatcher spectral alpha failed, falling back to local approximation: %s", exc)
+
+    candidate_matrices = []
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad or parameter.ndim < 2 or "weight" not in name:
+            continue
+        candidate_matrices.append(parameter.detach().float().reshape(parameter.shape[0], -1).cpu())
+
+    if not candidate_matrices:
+        return float("nan")
+
+    alphas = []
+    for weight_matrix in candidate_matrices[-max_layers:]:
+        singular_values = torch.linalg.svdvals(weight_matrix)
+        eigenvalues = torch.square(singular_values).numpy()
+        eigenvalues = eigenvalues[np.isfinite(eigenvalues) & (eigenvalues > 0)]
+        if eigenvalues.size < 10:
+            continue
+
+        xmin = float(np.quantile(eigenvalues, max(0.0, 1.0 - tail_fraction)))
+        tail = eigenvalues[eigenvalues >= xmin]
+        if tail.size < 5:
+            continue
+
+        logs = np.log(np.maximum(tail / max(xmin, 1e-12), 1.0 + 1e-12))
+        denom = float(np.sum(logs))
+        if denom <= 0:
+            continue
+
+        alphas.append(1.0 + tail.size / denom)
+
+    return float(np.mean(alphas)) if alphas else float("nan")
+
+
+def calculate_nc1_ratio(
+        representations: torch.Tensor,
+        labels: torch.Tensor
+) -> float:
+    """
+    Compute the neural-collapse NC1 ratio Tr(Sw Sb^-1).
+    """
+    if representations.numel() == 0 or labels.numel() == 0:
+        return float("nan")
+
+    features = representations.float()
+    labels = labels.long()
+    unique_labels = torch.unique(labels)
+    if unique_labels.numel() < 2:
+        return float("nan")
+
+    global_mean = features.mean(dim=0)
+    feature_dim = features.shape[1]
+    sigma_w = torch.zeros((feature_dim, feature_dim), dtype=features.dtype)
+    sigma_b = torch.zeros((feature_dim, feature_dim), dtype=features.dtype)
+
+    valid_classes = 0
+    for label in unique_labels:
+        class_features = features[labels == label]
+        if class_features.shape[0] < 2:
+            continue
+        class_mean = class_features.mean(dim=0)
+        centered = class_features - class_mean
+        sigma_w += centered.T @ centered / class_features.shape[0]
+        mean_diff = (class_mean - global_mean).unsqueeze(1)
+        sigma_b += mean_diff @ mean_diff.T
+        valid_classes += 1
+
+    if valid_classes < 2:
+        return float("nan")
+
+    sigma_w /= valid_classes
+    sigma_b /= valid_classes
+
+    sigma_b_pinv = torch.linalg.pinv(sigma_b)
+    nc1_ratio = torch.trace(sigma_w @ sigma_b_pinv)
+    return float(nc1_ratio.item())
+
+
+def calculate_linear_cka(
+        representations: torch.Tensor,
+        previous_representations: Optional[torch.Tensor]
+) -> float:
+    """
+    Compute linear CKA between current and previous representations.
+    """
+    if previous_representations is None:
+        return float("nan")
+    if representations.shape != previous_representations.shape:
+        return float("nan")
+
+    x = representations.float()
+    y = previous_representations.float()
+    x = x - x.mean(dim=0, keepdim=True)
+    y = y - y.mean(dim=0, keepdim=True)
+
+    x_gram = x @ x.T
+    y_gram = y @ y.T
+
+    n = x_gram.shape[0]
+    if n < 2:
+        return float("nan")
+
+    h = torch.eye(n) - torch.full((n, n), 1.0 / n)
+    x_centered = h @ x_gram @ h
+    y_centered = h @ y_gram @ h
+
+    hsic_xy = torch.sum(x_centered * y_centered)
+    hsic_xx = torch.sum(x_centered * x_centered)
+    hsic_yy = torch.sum(y_centered * y_centered)
+    denom = torch.sqrt(hsic_xx * hsic_yy)
+    if denom <= 0:
+        return float("nan")
+
+    return float((hsic_xy / denom).item())
+
+
+def calculate_l2_weight_distance(model: torch.nn.Module) -> float:
+    """
+    Compute the L2 distance between current trainable weights and the initial snapshot.
+    """
+    eval_state = _get_evaluation_state(model)
+    initial_weights = eval_state["initial_weights"]
+    if initial_weights is None:
+        return float("nan")
+
+    current_weights = _flatten_trainable_parameters(model).detach().cpu()
+    if current_weights.shape != initial_weights.shape:
+        return float("nan")
+
+    return float(torch.norm(current_weights - initial_weights, p=2).item())
+
+
+def calculate_additional_metrics(
+        model: torch.nn.Module,
+        dataset: torch.utils.data.Dataset,
+        batch_size: int,
+        device: str = "cuda",
+        max_samples: int = 512,
+        update_state: bool = True,
+) -> Dict[str, float]:
+    """
+    Compute advanced structural metrics on a deterministic subset of the dataset.
+    """
+    eval_state = _get_evaluation_state(model)
+    metric_dataset = _select_metric_dataset(dataset, max_samples)
+    representations, labels = _collect_representations(model, metric_dataset, batch_size, device)
+
+    metrics = {
+        "spectral_alpha": calculate_spectral_alpha(model),
+        "nc1_ratio": calculate_nc1_ratio(representations, labels),
+        "cka": calculate_linear_cka(representations, eval_state["previous_representations"]),
+        "l2_weight_distance": calculate_l2_weight_distance(model),
+    }
+
+    if update_state:
+        eval_state["previous_representations"] = representations.clone()
+    return metrics
+
+
+def _format_metric_value(metric_value: float) -> str:
+    if metric_value is None or not np.isfinite(metric_value):
+        return "n/a"
+    return f"{metric_value:.4f}"
+
 
 def _evaluate_model_core(
         model: torch.nn.Module,
@@ -24,7 +312,10 @@ def _evaluate_model_core(
         dataset: torch.utils.data.Dataset,
         device: str = "cuda",
         subset_size: Optional[int] = None,
-        random_seed: Optional[int] = None
+        random_seed: Optional[int] = None,
+        include_advanced_metrics: bool = False,
+        advanced_metric_subset_size: int = 512,
+        update_advanced_metric_state: bool = True,
 ) -> Dict[str, float]:
     """
     Core evaluation function that handles both full and subset evaluation.
@@ -84,8 +375,32 @@ def _evaluate_model_core(
         "accuracy": accuracy_score(all_labels, all_preds)
     }
 
+    if include_advanced_metrics:
+        metrics.update(
+            calculate_additional_metrics(
+                model=model,
+                dataset=eval_dataset,
+                batch_size=batch_size,
+                device=device,
+                max_samples=advanced_metric_subset_size,
+                update_state=update_advanced_metric_state,
+            )
+        )
+
     subset_info = f" on subset of {len(eval_dataset)} samples" if subset_size else ""
-    logging.info(f"Model evaluation{subset_info} took {time.perf_counter() - start:.2f} seconds")
+    metric_suffix = ""
+    if include_advanced_metrics:
+        metric_suffix = (
+            f" | alpha={_format_metric_value(metrics['spectral_alpha'])}"
+            f" nc1={_format_metric_value(metrics['nc1_ratio'])}"
+            f" cka={_format_metric_value(metrics['cka'])}"
+            f" dW={_format_metric_value(metrics['l2_weight_distance'])}"
+        )
+    logging.info(
+        f"Model evaluation{subset_info} took {time.perf_counter() - start:.2f} seconds"
+        f" | f1={metrics['f1_score']:.4f} acc={metrics['accuracy']:.4f} loss={metrics['loss']:.4f}"
+        f"{metric_suffix}"
+    )
     return metrics
 
 
@@ -94,7 +409,10 @@ def evaluate_model(
         criterion,
         batch_size: int,
         dataset: Optional[torch.utils.data.Dataset] = None,
-        device: str = "cuda"
+        device: str = "cuda",
+        include_advanced_metrics: bool = False,
+        advanced_metric_subset_size: int = 512,
+        update_advanced_metric_state: bool = True,
 ) -> Dict[str, float]:
     """
     Evaluate a PyTorch model on a given dataset.
@@ -123,7 +441,16 @@ def evaluate_model(
     if dataset is None:
         raise ValueError("Dataset must be provided for evaluation")
 
-    return _evaluate_model_core(model, criterion, batch_size, dataset, device)
+    return _evaluate_model_core(
+        model,
+        criterion,
+        batch_size,
+        dataset,
+        device,
+        include_advanced_metrics=include_advanced_metrics,
+        advanced_metric_subset_size=advanced_metric_subset_size,
+        update_advanced_metric_state=update_advanced_metric_state,
+    )
 
 
 def approximate_evaluate_model(
