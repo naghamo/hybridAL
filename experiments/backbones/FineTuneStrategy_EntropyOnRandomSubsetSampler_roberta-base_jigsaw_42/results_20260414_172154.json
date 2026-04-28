@@ -1,0 +1,443 @@
+{
+  "cfg": {
+    "seed": 42,
+    "total_rounds": 25,
+    "initial_pool_size": 200,
+    "acquisition_batch_size": 32,
+    "min_rounds_before_plateau": 10,
+    "plateau_patience": -1,
+    "plateau_f1_threshold": 0.0005,
+    "max_seconds": 2400,
+    "pool_proportion_threshold": -1,
+    "sampler_class": "EntropyOnRandomSubsetSampler",
+    "sampler_kwargs": {
+      "random_subset_size": 1000,
+      "seed": 42
+    },
+    "strategy_class": "FineTuneStrategy",
+    "strategy_kwargs": {},
+    "model_name_or_path": "roberta-base",
+    "num_labels": 2,
+    "tokenizer_kwargs": {
+      "max_length": 128,
+      "padding": "max_length",
+      "truncation": true,
+      "add_special_tokens": true,
+      "return_tensors": "pt"
+    },
+    "optimizer_class": "AdamW",
+    "optimizer_kwargs": {
+      "lr": 2e-05,
+      "weight_decay": 0.001
+    },
+    "criterion_class": "CrossEntropyLoss",
+    "criterion_kwargs": {},
+    "scheduler_class": null,
+    "scheduler_kwargs": {},
+    "device": "cuda",
+    "epochs": 5,
+    "batch_size": 16,
+    "data": "jigsaw",
+    "save_dir": "experiments/backbones",
+    "experiment_name": "FineTuneStrategy_EntropyOnRandomSubsetSampler_roberta-base_jigsaw_42"
+  },
+  "total_rounds": 25,
+  "round_val_stats": [
+    {
+      "training_time": 9.633018493652344,
+      "avg_loss": 0.3556915957337389,
+      "epochs": 5,
+      "total_samples": 200,
+      "new_samples": 0,
+      "loss": 0.31154614900238814,
+      "f1_score": 0.7777594336672795,
+      "accuracy": 0.8953634085213033,
+      "pool_stats": {
+        "labeled_count": 200,
+        "unlabeled_count": 125860,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 11.588228225708008,
+      "avg_loss": 0.05439027937750022,
+      "epochs": 5,
+      "total_samples": 232,
+      "new_samples": 32,
+      "loss": 0.6495779427746311,
+      "f1_score": 0.7286034121081223,
+      "accuracy": 0.8489974937343359,
+      "pool_stats": {
+        "labeled_count": 232,
+        "unlabeled_count": 125828,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 12.683918714523315,
+      "avg_loss": 0.008099563421873266,
+      "epochs": 5,
+      "total_samples": 264,
+      "new_samples": 32,
+      "loss": 0.5521980402420741,
+      "f1_score": 0.7818104160279439,
+      "accuracy": 0.8941102756892231,
+      "pool_stats": {
+        "labeled_count": 264,
+        "unlabeled_count": 125796,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 14.467434644699097,
+      "avg_loss": 0.05176898447772194,
+      "epochs": 5,
+      "total_samples": 296,
+      "new_samples": 32,
+      "loss": 0.2804857339413138,
+      "f1_score": 0.8599016853932584,
+      "accuracy": 0.9461152882205514,
+      "pool_stats": {
+        "labeled_count": 296,
+        "unlabeled_count": 125764,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 15.994989156723022,
+      "avg_loss": 0.0624183867398339,
+      "epochs": 5,
+      "total_samples": 328,
+      "new_samples": 32,
+      "loss": 0.23983898013073485,
+      "f1_score": 0.8553840045203953,
+      "accuracy": 0.9442355889724311,
+      "pool_stats": {
+        "labeled_count": 328,
+        "unlabeled_count": 125732,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 17.203323364257812,
+      "avg_loss": 0.030110153095776457,
+      "epochs": 5,
+      "total_samples": 360,
+      "new_samples": 32,
+      "loss": 0.2759360225131968,
+      "f1_score": 0.8588086612182997,
+      "accuracy": 0.9473684210526315,
+      "pool_stats": {
+        "labeled_count": 360,
+        "unlabeled_count": 125700,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 19.139224767684937,
+      "avg_loss": 0.034477529760450126,
+      "epochs": 5,
+      "total_samples": 392,
+      "new_samples": 32,
+      "loss": 0.22052676863590023,
+      "f1_score": 0.8771001881807112,
+      "accuracy": 0.9598997493734336,
+      "pool_stats": {
+        "labeled_count": 392,
+        "unlabeled_count": 125668,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 20.80293083190918,
+      "avg_loss": 0.04629847530611894,
+      "epochs": 5,
+      "total_samples": 424,
+      "new_samples": 32,
+      "loss": 0.19778837715392,
+      "f1_score": 0.8812515591969643,
+      "accuracy": 0.9573934837092731,
+      "pool_stats": {
+        "labeled_count": 424,
+        "unlabeled_count": 125636,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 20.516306400299072,
+      "avg_loss": 0.033622249558262915,
+      "epochs": 5,
+      "total_samples": 456,
+      "new_samples": 32,
+      "loss": 0.240879631023854,
+      "f1_score": 0.876308885932774,
+      "accuracy": 0.9542606516290727,
+      "pool_stats": {
+        "labeled_count": 456,
+        "unlabeled_count": 125604,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 22.33617877960205,
+      "avg_loss": 0.034861342976575775,
+      "epochs": 5,
+      "total_samples": 488,
+      "new_samples": 32,
+      "loss": 0.2169321049854625,
+      "f1_score": 0.871921285392788,
+      "accuracy": 0.956766917293233,
+      "pool_stats": {
+        "labeled_count": 488,
+        "unlabeled_count": 125572,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 25.382588624954224,
+      "avg_loss": 0.03413300964554462,
+      "epochs": 5,
+      "total_samples": 520,
+      "new_samples": 32,
+      "loss": 0.3048006778972922,
+      "f1_score": 0.8462847582498871,
+      "accuracy": 0.9392230576441103,
+      "pool_stats": {
+        "labeled_count": 520,
+        "unlabeled_count": 125540,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 26.84722352027893,
+      "avg_loss": 0.022326862913988797,
+      "epochs": 5,
+      "total_samples": 552,
+      "new_samples": 32,
+      "loss": 0.23910606861623818,
+      "f1_score": 0.8747252747252747,
+      "accuracy": 0.9598997493734336,
+      "pool_stats": {
+        "labeled_count": 552,
+        "unlabeled_count": 125508,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 28.30374503135681,
+      "avg_loss": 0.03961108640611889,
+      "epochs": 5,
+      "total_samples": 584,
+      "new_samples": 32,
+      "loss": 0.30043769319701824,
+      "f1_score": 0.8491985047673546,
+      "accuracy": 0.9442355889724311,
+      "pool_stats": {
+        "labeled_count": 584,
+        "unlabeled_count": 125476,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 30.124528646469116,
+      "avg_loss": 0.031139289339308818,
+      "epochs": 5,
+      "total_samples": 616,
+      "new_samples": 32,
+      "loss": 0.2670758170451154,
+      "f1_score": 0.8588086612182997,
+      "accuracy": 0.9473684210526315,
+      "pool_stats": {
+        "labeled_count": 616,
+        "unlabeled_count": 125444,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 31.64376211166382,
+      "avg_loss": 0.023707359337401236,
+      "epochs": 5,
+      "total_samples": 648,
+      "new_samples": 32,
+      "loss": 0.24408511925910717,
+      "f1_score": 0.8666523436101263,
+      "accuracy": 0.9517543859649122,
+      "pool_stats": {
+        "labeled_count": 648,
+        "unlabeled_count": 125412,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 33.535826683044434,
+      "avg_loss": 0.02232765770560607,
+      "epochs": 5,
+      "total_samples": 680,
+      "new_samples": 32,
+      "loss": 0.2721208665239101,
+      "f1_score": 0.8667602823883997,
+      "accuracy": 0.9511278195488722,
+      "pool_stats": {
+        "labeled_count": 680,
+        "unlabeled_count": 125380,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 35.00800442695618,
+      "avg_loss": 0.028392783385998984,
+      "epochs": 5,
+      "total_samples": 712,
+      "new_samples": 32,
+      "loss": 0.24564907750464043,
+      "f1_score": 0.8763828132103493,
+      "accuracy": 0.956766917293233,
+      "pool_stats": {
+        "labeled_count": 712,
+        "unlabeled_count": 125348,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 32.572508096694946,
+      "avg_loss": 0.023144855179472214,
+      "epochs": 5,
+      "total_samples": 744,
+      "new_samples": 32,
+      "loss": 0.20315571849678235,
+      "f1_score": 0.8887860624383398,
+      "accuracy": 0.9642857142857143,
+      "pool_stats": {
+        "labeled_count": 744,
+        "unlabeled_count": 125316,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 37.54583430290222,
+      "avg_loss": 0.01513397013026109,
+      "epochs": 5,
+      "total_samples": 776,
+      "new_samples": 32,
+      "loss": 0.21510332541576646,
+      "f1_score": 0.8924291183012383,
+      "accuracy": 0.9630325814536341,
+      "pool_stats": {
+        "labeled_count": 776,
+        "unlabeled_count": 125284,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 39.85084414482117,
+      "avg_loss": 0.03533201816031828,
+      "epochs": 5,
+      "total_samples": 808,
+      "new_samples": 32,
+      "loss": 0.2212023760828015,
+      "f1_score": 0.8778677359616769,
+      "accuracy": 0.9592731829573935,
+      "pool_stats": {
+        "labeled_count": 808,
+        "unlabeled_count": 125252,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 40.854902505874634,
+      "avg_loss": 0.012847081659623106,
+      "epochs": 5,
+      "total_samples": 840,
+      "new_samples": 32,
+      "loss": 0.2399747504251718,
+      "f1_score": 0.8845658503807675,
+      "accuracy": 0.9611528822055138,
+      "pool_stats": {
+        "labeled_count": 840,
+        "unlabeled_count": 125220,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 42.28944206237793,
+      "avg_loss": 0.014907499973249453,
+      "epochs": 5,
+      "total_samples": 872,
+      "new_samples": 32,
+      "loss": 0.22264058783184737,
+      "f1_score": 0.8939389078576503,
+      "accuracy": 0.9636591478696742,
+      "pool_stats": {
+        "labeled_count": 872,
+        "unlabeled_count": 125188,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 43.96270513534546,
+      "avg_loss": 0.024576405886144036,
+      "epochs": 5,
+      "total_samples": 904,
+      "new_samples": 32,
+      "loss": 0.23011212686804355,
+      "f1_score": 0.8871321338007536,
+      "accuracy": 0.9605263157894737,
+      "pool_stats": {
+        "labeled_count": 904,
+        "unlabeled_count": 125156,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 46.15954637527466,
+      "avg_loss": 0.0113491293550982,
+      "epochs": 5,
+      "total_samples": 936,
+      "new_samples": 32,
+      "loss": 0.21871241671935424,
+      "f1_score": 0.9045856290174472,
+      "accuracy": 0.968671679197995,
+      "pool_stats": {
+        "labeled_count": 936,
+        "unlabeled_count": 125124,
+        "total_count": 126060
+      }
+    },
+    {
+      "training_time": 42.73927974700928,
+      "avg_loss": 0.02161029364844998,
+      "epochs": 5,
+      "total_samples": 968,
+      "new_samples": 32,
+      "loss": 0.24278598081378733,
+      "f1_score": 0.891565773918715,
+      "accuracy": 0.9624060150375939,
+      "pool_stats": {
+        "labeled_count": 968,
+        "unlabeled_count": 125092,
+        "total_count": 126060
+      }
+    }
+  ],
+  "strategy_metadata": {},
+  "final_pool_stats": {
+    "labeled_count": 968,
+    "unlabeled_count": 125092,
+    "total_count": 126060
+  },
+  "final_test_stats": {
+    "loss": 0.2865968277018097,
+    "f1_score": 0.8796902133439697,
+    "accuracy": 0.95729280902397
+  },
+  "confusion_matrix": [
+    [
+      28092,
+      764
+    ],
+    [
+      599,
+      2460
+    ]
+  ]
+}
