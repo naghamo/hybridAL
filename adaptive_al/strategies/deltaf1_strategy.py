@@ -51,17 +51,26 @@ class DeltaF1Strategy(BaseStrategy):
         fine_tune (FineTuneStrategy): Fine-tuning strategy instance.
         retrain (RetrainStrategy): Retraining strategy instance.
     """
-    def __init__(self, epsilon: float, k: int, signal: str = "delta_f1", **kwargs):
+    def __init__(self, epsilon: float, k: int, signal: str = "delta_f1",
+                 signal_normalizer: Optional[float] = None, **kwargs):
         """
         Initialize the Delta F1 adaptive strategy.
 
         Args:
-            epsilon (float): Threshold for absolute signal change. When |Δsignal| < epsilon
-                            for k consecutive rounds, switch to fine-tuning.
+            epsilon (float): Threshold for the (normalized) switching value. When
+                value_t < epsilon for k consecutive rounds, switch to fine-tuning.
+                Values are mapped per-signal into "small=stabilized" form (see
+                _compute_active_signal_value); if signal_normalizer is set, the
+                value is divided by it before the comparison so a single ε works
+                across signals with different raw scales.
             k (int): Number of consecutive rounds below epsilon before switching.
             signal (str): Monitoring signal to use. One of "delta_f1" (default),
                          "delta_loss", "delta_accuracy", "gradient_norm",
                          "spectral_alpha", "nc1_ratio", "cka", "l2_weight_distance".
+            signal_normalizer (Optional[float]): Per-signal divisor obtained from
+                the calibration run (the round-1-or-first-finite raw value). If
+                None, the raw "small=stabilized" value is compared to epsilon
+                directly.
             **kwargs: Additional arguments passed to BaseStrategy.
         """
         super().__init__(**kwargs)
@@ -69,10 +78,13 @@ class DeltaF1Strategy(BaseStrategy):
         self.epsilon = epsilon
         self.k = k
         self.signal = signal
+        self.signal_normalizer = signal_normalizer
 
         self.count = 0
         self.switched = False
-        self.prev_signal = None
+        # Tracks the previous round's raw metric for delta-style signals
+        # (delta_f1/delta_accuracy/delta_loss); None at round 1.
+        self._prev_metric: Optional[float] = None
         self.switch_round: Optional[int] = None
         self._internal_round = 0
 
@@ -106,6 +118,9 @@ class DeltaF1Strategy(BaseStrategy):
                 val_dataset,
                 self.device,
                 include_advanced_metrics=True,
+                # active_learning.train_one_round is the canonical state-updater
+                # (it calls evaluate_model with update_state defaulting to True
+                # AFTER this call), so we read prev state without disturbing it.
                 update_advanced_metric_state=False,
             )
             return stats[self.signal]
@@ -133,15 +148,16 @@ class DeltaF1Strategy(BaseStrategy):
         self.optimizer.zero_grad()
 
         loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
-        total_loss = torch.tensor(0.0, device=self.device)
 
+        # Backward per-batch and accumulate into .grad. Summing losses across
+        # all val batches and backwarding once retains every batch's autograd
+        # graph in parallel, which OOMs on val sets of even a few thousand.
         for inputs, targets in loader:
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             targets = targets.to(self.device)
             outputs = self.model(**inputs)
-            total_loss = total_loss + self.criterion(outputs.logits, targets)
-
-        total_loss.backward()
+            loss = self.criterion(outputs.logits, targets)
+            loss.backward()
 
         norm = sum(
             p.grad.norm().item() ** 2
@@ -152,12 +168,51 @@ class DeltaF1Strategy(BaseStrategy):
         self.model.eval()
         return norm
 
+    def _compute_active_signal_value(self, val_dataset) -> float:
+        """
+        Map _calc_signal into a "small = stabilized" scalar comparable to
+        epsilon. Round 1 returns +inf for any signal that needs a previous
+        round, so switching can never trigger on the first round.
+
+        - delta_f1/delta_accuracy/delta_loss : |metric_t - metric_{t-1}|
+        - cka                                 : 1 - CKA_t   (raw CKA → 1 at stable)
+        - gradient_norm, l2_weight_distance,
+          spectral_alpha, nc1_ratio           : raw value (already small-=-stable)
+        """
+        raw = self._calc_signal(val_dataset)
+
+        if self.signal in ("delta_f1", "delta_accuracy", "delta_loss"):
+            # _calc_signal returns the metric (F1 / accuracy / -loss);
+            # switching value is the absolute round-to-round change.
+            if self._prev_metric is None:
+                self._prev_metric = raw
+                return float("inf")
+            value = abs(raw - self._prev_metric)
+            self._prev_metric = raw
+            return value
+
+        if self.signal == "cka":
+            # NaN at round 1 (no previous representations); treat as +inf so
+            # the first round does not count as stabilized.
+            if not (raw == raw):  # NaN check without importing math
+                return float("inf")
+            return 1.0 - raw
+
+        # gradient_norm, l2_weight_distance, spectral_alpha, nc1_ratio:
+        # raw is already in "small = stabilized" form. l2 may legitimately be
+        # +inf at round 1 (no previous weight snapshot).
+        if not (raw == raw):
+            return float("inf")
+        return raw
+
     def _train_implementation(self, pool: DataPool, new_indices: List[int]) -> Dict:
         """
-        Train using retrain or fine-tune strategy based on signal improvement tracking.
+        Train using retrain or fine-tune strategy based on signal stabilization.
 
-        Uses the fixed validation set (pool.val_dataset) to monitor the signal —
-        no acquisition budget is wasted on monitoring.
+        After each retraining round we compute the active signal in
+        "small = stabilized" form, optionally normalize by self.signal_normalizer
+        (a calibration constant), and switch to fine-tuning once the normalized
+        value stays below epsilon for k consecutive rounds.
 
         Args:
             pool (DataPool): Current data pool with labeled/unlabeled splits.
@@ -173,11 +228,15 @@ class DeltaF1Strategy(BaseStrategy):
 
         stats = self.retrain._train_implementation(pool, new_indices)
 
-        cur_signal = self._calc_signal(pool.val_dataset)
-        delta = cur_signal - self.prev_signal if self.prev_signal is not None else float('inf')
-        self.prev_signal = cur_signal
+        switching_value = self._compute_active_signal_value(pool.val_dataset)
 
-        if abs(delta) < self.epsilon:
+        normalized = switching_value
+        if (self.signal_normalizer is not None
+                and self.signal_normalizer > 0
+                and switching_value != float("inf")):
+            normalized = switching_value / self.signal_normalizer
+
+        if normalized < self.epsilon:
             self.count += 1
         else:
             self.count = 0
@@ -189,23 +248,27 @@ class DeltaF1Strategy(BaseStrategy):
             "gradient_norm": "GradNorm",
             "spectral_alpha": "Alpha",
             "nc1_ratio": "NC1",
-            "cka": "CKA",
+            "cka": "1-CKA",
             "l2_weight_distance": "dW",
         }.get(self.signal, self.signal)
-        delta_str = f"{delta:+.6f}" if self.prev_signal is not None else "—"
+        raw_str = "inf" if switching_value == float("inf") else f"{switching_value:.6f}"
+        norm_str = "inf" if normalized == float("inf") else f"{normalized:.6f}"
 
         if self.count >= self.k and not self.switched:
             self.switch_round = self._internal_round
             self.switched = True
             tqdm.write(
                 f"  [HybridAL] *** SWITCHING to FineTune at round {self.switch_round} ***\n"
-                f"             {signal_label} = {cur_signal:.6f}  Δ = {delta_str}  "
+                f"             {signal_label}={raw_str}  norm={norm_str}  "
                 f"({self.count} consecutive rounds below ε={self.epsilon})"
             )
         else:
-            status = f"count {self.count}/{self.k}" if self.count > 0 else "reset (improvement detected)"
+            status = (
+                f"count {self.count}/{self.k}" if self.count > 0
+                else "reset (signal above ε)"
+            )
             tqdm.write(
-                f"  [HybridAL] {signal_label} = {cur_signal:.6f}  Δ = {delta_str}  "
+                f"  [HybridAL] {signal_label}={raw_str}  norm={norm_str}  "
                 f"ε={self.epsilon}  →  {status}"
             )
 

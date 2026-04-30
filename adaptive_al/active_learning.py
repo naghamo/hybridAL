@@ -196,6 +196,9 @@ class ActiveLearning:
         self.final_test_stats: Dict = {}
 
         self.current_round = 0
+        # For computing absolute deltas of f1/accuracy/loss across rounds
+        # whenever log_all_signals=True. Filled in train_one_round.
+        self._prev_signal_metrics: Optional[Dict[str, float]] = None
 
     def _load_data(self):
         """
@@ -284,6 +287,9 @@ class ActiveLearning:
             "pool_stats": self.pool.get_pool_stats()
         }
 
+        if self.cfg.log_all_signals:
+            round_stats["signals"] = self._compute_round_signals(val_stats)
+
         self.round_stats.append(round_stats)
         tqdm.write(
             f"  {trend} Val F1: {val_stats['f1_score']:.4f} ({delta_str})  |  "
@@ -325,6 +331,77 @@ class ActiveLearning:
         except TypeError:
             return "n/a"
         return f"{value:.4f}"
+
+    def _compute_round_signals(self, val_stats: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Build the per-round signals dict logged when cfg.log_all_signals=True.
+
+        Convention: every value follows "value < ε ⇒ stabilized".
+          - delta_f1 / delta_accuracy / delta_loss : |metric_t - metric_{t-1}|;
+            +inf at round 1 (no previous metrics)
+          - gradient_norm                          : ||∇_θ L_val(θ_t)||_2 on the
+            full validation set
+          - l2_weight_distance, cka                : taken straight from val_stats
+            (already populated by evaluate_model with include_advanced_metrics=True)
+        """
+        f1_t = val_stats["f1_score"]
+        acc_t = val_stats["accuracy"]
+        loss_t = val_stats["loss"]
+
+        if self._prev_signal_metrics is None:
+            delta_f1 = float("inf")
+            delta_accuracy = float("inf")
+            delta_loss = float("inf")
+        else:
+            prev = self._prev_signal_metrics
+            delta_f1 = abs(f1_t - prev["f1_score"])
+            delta_accuracy = abs(acc_t - prev["accuracy"])
+            delta_loss = abs(loss_t - prev["loss"])
+
+        self._prev_signal_metrics = {"f1_score": f1_t, "accuracy": acc_t, "loss": loss_t}
+
+        grad_norm = self._compute_gradient_norm(self.val_dataset)
+
+        return {
+            "delta_f1": float(delta_f1),
+            "delta_accuracy": float(delta_accuracy),
+            "delta_loss": float(delta_loss),
+            "gradient_norm": float(grad_norm),
+            "l2_weight_distance": float(val_stats.get("l2_weight_distance", float("nan"))),
+            "cka": float(val_stats.get("cka", float("nan"))),
+        }
+
+    def _compute_gradient_norm(self, val_dataset) -> float:
+        """
+        L2 norm of model parameter gradients accumulated over val_dataset.
+
+        Computes ||∇_θ Σ_b L_val_b(θ)||_2. We backward per batch and let .grad
+        accumulate (gradients are additive), instead of summing losses across
+        all batches into a single graph and backwarding once — the latter keeps
+        every batch's activations alive and OOMs on a 5k-example val set.
+        """
+        from torch.utils.data import DataLoader as _DL
+        was_training = self.model.training
+        self.model.train()
+        self.strategy.optimizer.zero_grad()
+
+        loader = _DL(val_dataset, batch_size=self.cfg.batch_size, shuffle=False)
+
+        for inputs, targets in loader:
+            inputs = {k: v.to(self.cfg.device) for k, v in inputs.items()}
+            targets = targets.to(self.cfg.device)
+            outputs = self.model(**inputs)
+            loss = self.strategy.criterion(outputs.logits, targets)
+            loss.backward()  # accumulates into .grad; frees this batch's graph
+
+        norm = sum(
+            p.grad.norm().item() ** 2
+            for p in self.model.parameters() if p.grad is not None
+        ) ** 0.5
+
+        self.strategy.optimizer.zero_grad()
+        self.model.train(was_training)
+        return norm
 
     def sample_next_batch(self) -> List[int]:
         """

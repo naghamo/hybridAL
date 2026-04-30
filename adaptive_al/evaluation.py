@@ -29,15 +29,16 @@ def initialize_evaluation_state(model: torch.nn.Module) -> None:
     """
     Cache model state needed by advanced evaluation metrics.
 
-    Stores a flattened snapshot of the initial trainable parameters so later
-    evaluations can report the L2 drift from the starting checkpoint.
+    Tracks the previous round's trainable-parameter snapshot and the previous
+    round's penultimate representations so CKA and L2 weight distance can be
+    computed against round t-1. Both start as None; they are populated by
+    calculate_additional_metrics(... update_state=True) at the end of each round.
     """
     if hasattr(model, _EVAL_STATE_ATTR):
         return
 
-    initial_weights = _flatten_trainable_parameters(model).detach().cpu()
     setattr(model, _EVAL_STATE_ATTR, {
-        "initial_weights": initial_weights,
+        "previous_weights": None,
         "previous_representations": None,
     })
 
@@ -258,18 +259,21 @@ def calculate_linear_cka(
 
 def calculate_l2_weight_distance(model: torch.nn.Module) -> float:
     """
-    Compute the L2 distance between current trainable weights and the initial snapshot.
+    Compute ||θ_t - θ_{t-1}||_2: the L2 distance between current trainable
+    weights and the previous round's snapshot. Returns +inf at round 1 (no
+    previous snapshot yet); the snapshot is updated by calculate_additional_metrics
+    when update_state=True.
     """
     eval_state = _get_evaluation_state(model)
-    initial_weights = eval_state["initial_weights"]
-    if initial_weights is None:
-        return float("nan")
+    previous_weights = eval_state.get("previous_weights")
+    if previous_weights is None:
+        return float("inf")
 
     current_weights = _flatten_trainable_parameters(model).detach().cpu()
-    if current_weights.shape != initial_weights.shape:
+    if current_weights.shape != previous_weights.shape:
         return float("nan")
 
-    return float(torch.norm(current_weights - initial_weights, p=2).item())
+    return float(torch.norm(current_weights - previous_weights, p=2).item())
 
 
 def calculate_additional_metrics(
@@ -296,6 +300,7 @@ def calculate_additional_metrics(
 
     if update_state:
         eval_state["previous_representations"] = representations.clone()
+        eval_state["previous_weights"] = _flatten_trainable_parameters(model).detach().cpu()
     return metrics
 
 

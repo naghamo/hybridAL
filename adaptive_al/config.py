@@ -80,11 +80,16 @@ class ExperimentConfig:
     early_stopping_min_delta: float = 1e-4
 
     # HybridAL switching signal. Selects which of the per-round signals drives
-    # the Retrain → FineTune switch in DeltaF1Strategy. All signals are still
-    # logged every round regardless of which one is active.
+    # the Retrain → FineTune switch in DeltaF1Strategy.
     # Options: "delta_f1", "delta_accuracy", "delta_loss",
-    #          "gradient_norm", "l2_weight_distance", "cka".
+    #          "gradient_norm", "l2_weight_distance", "cka",
+    #          "spectral_alpha", "nc1_ratio".
     switching_signal: str = "delta_f1"
+
+    # When True, every round logs ALL signal values (not just the active one)
+    # under round_stats["signals"]. Used for the signal-ablation calibration and
+    # for full-trajectory logging during the ablation runs.
+    log_all_signals: bool = False
 
     # Dataset for the model
     data: str = field(default=None)
