@@ -54,8 +54,9 @@ class NewOnlyStrategy(BaseStrategy):
             # Initial round: train on the full labeled pool (same as other strategies)
             labeled_subset = pool.get_labeled_subset()
             dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
-            total_loss, num_batches = self.train_epochs(dataloader)
-            return self.get_stats(total_loss, num_batches, labeled_subset, [])
+            total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
+            return self.get_stats(total_loss, num_batches, labeled_subset, [],
+                                  actual_epochs=actual_epochs)
 
         pool.add_labeled_samples(new_indices)
 
@@ -63,7 +64,8 @@ class NewOnlyStrategy(BaseStrategy):
         dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
 
 
-        total_loss, num_batches = self.train_epochs(dataloader)
+        total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
 
-        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices)
+        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices,
+                              actual_epochs=actual_epochs)
 

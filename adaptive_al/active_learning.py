@@ -150,7 +150,12 @@ class ActiveLearning:
 
         # --- Strategy
         self.strategy_cls = resolve_class(cfg.strategy_class, strategies)  # from our adaptive_al.strategies
-        self.strategy_kwargs = cfg.strategy_kwargs
+        self.strategy_kwargs = dict(cfg.strategy_kwargs)
+        # Inject top-level cfg.switching_signal as the DeltaF1Strategy `signal`
+        # kwarg if the caller has not already specified one in strategy_kwargs.
+        if (cfg.strategy_class == "DeltaF1Strategy"
+                and "signal" not in self.strategy_kwargs):
+            self.strategy_kwargs["signal"] = cfg.switching_signal
 
         # --- Sampler
         self.sampler_cls = resolve_class(cfg.sampler_class, samplers)  # from our adaptive_al.samplers
@@ -169,6 +174,9 @@ class ActiveLearning:
             device=cfg.device,
             epochs=cfg.epochs,
             batch_size=cfg.batch_size,
+            val_dataset=self.val_dataset,
+            early_stopping_patience=cfg.early_stopping_patience,
+            early_stopping_min_delta=cfg.early_stopping_min_delta,
             **self.strategy_kwargs  # optional extra kwargs
         )
 

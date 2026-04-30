@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from ..config import ExperimentConfig
 from ..pool import DataPool
+from ..evaluation import evaluate_model
 
 from transformers import AutoModelForSequenceClassification
 
@@ -40,7 +41,10 @@ class BaseStrategy(ABC):
                  optimizer_cls=None, optimizer_kwargs=None,
                  criterion_cls=None, criterion_kwargs=None,
                  scheduler_cls=None, scheduler_kwargs=None,
-                 device: str = None, epochs: int = None, batch_size: int = None):
+                 device: str = None, epochs: int = None, batch_size: int = None,
+                 val_dataset=None,
+                 early_stopping_patience: int = 2,
+                 early_stopping_min_delta: float = 1e-4):
         """Initialize the strategy either from scratch or by copying another strategy."""
         if strategy is not None:
             # Initialize from another strategy
@@ -61,6 +65,13 @@ class BaseStrategy(ABC):
             self.device = strategy.device
             self.epochs = strategy.epochs
             self.batch_size = strategy.batch_size
+
+            # Inherit early-stopping configuration from parent strategy so that
+            # nested strategies (DeltaF1Strategy, FixedSwitchStrategy) use the
+            # exact same val set, patience, and min_delta as everyone else.
+            self.val_dataset = strategy.val_dataset
+            self.early_stopping_patience = strategy.early_stopping_patience
+            self.early_stopping_min_delta = strategy.early_stopping_min_delta
         else:
             # Store the passed-in class/kwargs
             self.model = model
@@ -76,7 +87,10 @@ class BaseStrategy(ABC):
             self.device = device
             self.epochs = epochs
             self.batch_size = batch_size
-            # self.round_history: List[Dict] = None
+
+            self.val_dataset = val_dataset
+            self.early_stopping_patience = early_stopping_patience
+            self.early_stopping_min_delta = early_stopping_min_delta
 
             self._initialize_components()
 
@@ -136,21 +150,40 @@ class BaseStrategy(ABC):
         self.optimizer.step()
         return loss.item()
 
-    def train_epochs(self, dataloader) -> Tuple[float, int]:
+    def train_epochs(self, dataloader) -> Tuple[float, int, int]:
         """
-        Train the model for the configured number of epochs.
+        Train the model for up to self.epochs epochs with validation-loss early stopping.
+
+        After every epoch, validation loss is measured on self.val_dataset using the
+        same evaluate_model entry point used elsewhere in the pipeline. If validation
+        loss fails to improve by at least self.early_stopping_min_delta for
+        self.early_stopping_patience consecutive epochs, the loop breaks early. The
+        weights with the lowest observed validation loss are restored before returning.
 
         Args:
             dataloader: DataLoader providing training batches.
 
         Returns:
-            tuple: (total_loss, num_batches) across all epochs.
+            tuple: (total_loss, num_batches, actual_epochs) — total_loss/num_batches
+            cover only the epochs that actually ran; actual_epochs is the number
+            of epochs executed before early stopping (or self.epochs if no break).
         """
         start_time = time.time()
         total_loss = 0.0
         num_batches = 0
+        actual_epochs = 0
+
+        # evaluate_model toggles model.eval(); remember the mode train_epochs was
+        # called in so we can restore it for the next epoch's gradient updates.
+        initial_training_mode = self.model.training
+
+        best_val_loss = float('inf')
+        best_state = None
+        epochs_since_improve = 0
 
         for epoch in range(self.epochs):
+            self.model.train(initial_training_mode)
+
             epoch_start_time = time.time()
             epoch_loss = 0.0
             epoch_batches = 0
@@ -171,22 +204,72 @@ class BaseStrategy(ABC):
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            epoch_time = time.time() - epoch_start_time
-            avg_epoch_loss = epoch_loss / epoch_batches if epoch_batches > 0 else 0.0
-            tqdm.write(
-                f"    Epoch {epoch + 1}/{self.epochs}  |  "
-                f"Avg Loss: {avg_epoch_loss:.4f}  |  Time: {epoch_time:.1f}s"
-            )
-
             total_loss += epoch_loss
             num_batches += epoch_batches
+            actual_epochs += 1
+
+            avg_epoch_loss = epoch_loss / epoch_batches if epoch_batches > 0 else 0.0
+            epoch_time = time.time() - epoch_start_time
+
+            val_loss = self._compute_val_loss()
+
+            if val_loss is None:
+                # No validation set available; behave like the pre-ES loop.
+                tqdm.write(
+                    f"    Epoch {epoch + 1}/{self.epochs}  |  "
+                    f"Avg Loss: {avg_epoch_loss:.4f}  |  Time: {epoch_time:.1f}s"
+                )
+                continue
+
+            improved = (best_val_loss - val_loss) > self.early_stopping_min_delta
+            if improved:
+                best_val_loss = val_loss
+                best_state = copy.deepcopy(self.model.state_dict())
+                epochs_since_improve = 0
+            else:
+                epochs_since_improve += 1
+
+            tqdm.write(
+                f"    Epoch {epoch + 1}/{self.epochs}  |  "
+                f"Avg Loss: {avg_epoch_loss:.4f}  |  Val Loss: {val_loss:.4f}  |  "
+                f"Best: {best_val_loss:.4f}  |  "
+                f"Patience: {epochs_since_improve}/{self.early_stopping_patience}  |  "
+                f"Time: {epoch_time:.1f}s"
+            )
+
+            if epochs_since_improve >= self.early_stopping_patience:
+                tqdm.write(
+                    f"    [EarlyStop] No val-loss improvement >= {self.early_stopping_min_delta} "
+                    f"for {self.early_stopping_patience} epochs — stopping at epoch "
+                    f"{actual_epochs}/{self.epochs}"
+                )
+                break
+
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+
+        self.model.train(initial_training_mode)
 
         total_time = time.time() - start_time
-        logging.info(f"Training completed in {total_time:.2f}s")
+        logging.info(
+            f"Training completed in {total_time:.2f}s "
+            f"(actual_epochs={actual_epochs}/{self.epochs})"
+        )
 
-        return total_loss, num_batches
+        return total_loss, num_batches, actual_epochs
 
-    def get_stats(self, total_loss, num_batches, tot_samples, new_samples):
+    def _compute_val_loss(self):
+        """Return validation loss on self.val_dataset, or None if not available."""
+        if self.val_dataset is None:
+            return None
+        metrics = evaluate_model(
+            self.model, self.criterion, self.batch_size,
+            dataset=self.val_dataset, device=self.device,
+        )
+        return metrics["loss"]
+
+    def get_stats(self, total_loss, num_batches, tot_samples, new_samples,
+                  actual_epochs=None):
         """
         Compute training statistics for the current round.
 
@@ -195,16 +278,20 @@ class BaseStrategy(ABC):
             num_batches (int): Total number of batches processed.
             tot_samples: All samples used in training this round.
             new_samples: Newly added samples this round.
+            actual_epochs (int, optional): Number of epochs actually trained
+                (after early stopping). Falls back to self.epochs when not
+                supplied so older callers do not break.
 
         Returns:
-            Dict: Statistics including avg_loss, epochs, total_samples, new_samples.
+            Dict: Statistics including avg_loss, epochs (max), actual_epochs,
+                  total_samples, new_samples.
         """
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-        # Return model and training statistics
         return {
             "avg_loss": avg_loss,
             "epochs": self.epochs,
+            "actual_epochs": actual_epochs if actual_epochs is not None else self.epochs,
             "total_samples": len(tot_samples),
             "new_samples": len(new_samples) if new_samples is not None else 0,
         }

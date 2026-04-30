@@ -304,7 +304,7 @@ def parse_args():
     parser.add_argument("--save-dir", type=str, default=None)
 
     # ── Training ──────────────────────────────────────────────────────────── #
-    parser.add_argument("--epochs",        type=int,   default=5)
+    parser.add_argument("--epochs",        type=int,   default=10)
     parser.add_argument("--batch-size",    type=int,   default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--weight-decay",  type=float, default=1e-3)

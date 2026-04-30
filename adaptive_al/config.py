@@ -72,8 +72,19 @@ class ExperimentConfig:
     scheduler_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     device: str = 'cuda'
-    epochs: int = 5
+    epochs: int = 10
     batch_size: int = 16
+
+    # Early stopping (applied uniformly to all strategies; controls within-round epoch loop)
+    early_stopping_patience: int = 2
+    early_stopping_min_delta: float = 1e-4
+
+    # HybridAL switching signal. Selects which of the per-round signals drives
+    # the Retrain → FineTune switch in DeltaF1Strategy. All signals are still
+    # logged every round regardless of which one is active.
+    # Options: "delta_f1", "delta_accuracy", "delta_loss",
+    #          "gradient_norm", "l2_weight_distance", "cka".
+    switching_signal: str = "delta_f1"
 
     # Dataset for the model
     data: str = field(default=None)

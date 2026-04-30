@@ -56,5 +56,6 @@ class FineTuneStrategy(BaseStrategy):
         # Get all labeled data from the pool
         labeled_subset = pool.get_labeled_subset()
         dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
-        total_loss, num_batches = self.train_epochs(dataloader)
-        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices)
+        total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
+        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices,
+                              actual_epochs=actual_epochs)

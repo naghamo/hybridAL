@@ -167,30 +167,46 @@ python experimentation.py --help
 
 ---
 
-## Team
+[//]: # (## Team)
 
-* **Nagham Omar**
-* **Evgeny Mishliyakov**
-* **Vsevolod Rusanov**
-* **Maya Rozenshtein**
+[//]: # ()
+[//]: # (* **Nagham Omar**)
 
-Technion – Israel Institute of Technology
+[//]: # (* **Evgeny Mishliyakov**)
 
----
+[//]: # (* **Vsevolod Rusanov**)
 
-## Citation
+[//]: # (* **Maya Rozenshtein**)
 
-If you use this work, please cite:
+[//]: # ()
+[//]: # (Technion – Israel Institute of Technology)
 
-```
-@misc{omar2025hybridal,
-  title={HybridAL: Adaptive Training Strategy Switching in Pool-Based Active Learning Using ΔF1},
-  author={Nagham Omar and Evgeny Mishliyakov and Vsevolod Rusanov and Maya Rozenshtein},
-  year={2025},
-  institution={Technion – Israel Institute of Technology},
-  howpublished={\url{https://github.com/naghamo/deltaf1-hybrid-active-learning}}
-}
-```
+[//]: # ()
+[//]: # (---)
+
+[//]: # ()
+[//]: # (## Citation)
+
+[//]: # ()
+[//]: # (If you use this work, please cite:)
+
+[//]: # ()
+[//]: # (```)
+
+[//]: # (@misc{omar2025hybridal,)
+
+[//]: # (  title={HybridAL: Adaptive Training Strategy Switching in Pool-Based Active Learning Using ΔF1},)
+
+[//]: # (  author={Nagham Omar and Evgeny Mishliyakov and Vsevolod Rusanov and Maya Rozenshtein},)
+
+[//]: # (  year={2025},)
+
+[//]: # (  institution={Technion – Israel Institute of Technology},)
+
+[//]: # (  howpublished={\url{https://github.com/naghamo/deltaf1-hybrid-active-learning}})
+
+[//]: # (})
+[//]: # (```)
 
 ---
 

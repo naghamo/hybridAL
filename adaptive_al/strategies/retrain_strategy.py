@@ -55,6 +55,7 @@ class RetrainStrategy(BaseStrategy):
 
         self.reset()
 
-        total_loss, num_batches = self.train_epochs(dataloader)
+        total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
 
-        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices)
+        return self.get_stats(total_loss, num_batches, labeled_subset, new_indices,
+                              actual_epochs=actual_epochs)
