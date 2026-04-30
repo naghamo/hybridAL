@@ -35,7 +35,7 @@ import adaptive_al.samplers as samplers
 # Used in data loading eval string
 from .utils.data_loader import load_agnews, load_imdb, load_jigsaw, load_sst2, load_tweeteval, load_yahoo_answers
 
-from .evaluation import evaluate_model, compute_confusion_matrix
+from .evaluation import evaluate_model, compute_confusion_matrix, initialize_evaluation_state
 
 
 class ActiveLearning:
@@ -80,6 +80,7 @@ class ActiveLearning:
             self.cfg.model_name_or_path,
             num_labels=self.cfg.num_labels
         )
+        initialize_evaluation_state(self.model)
         tqdm.write(f"  [Init] Model loaded  ({self.cfg.num_labels} labels, device={self.cfg.device})")
 
     def _initialize_data(self):
@@ -261,8 +262,14 @@ class ActiveLearning:
         training_stats = self.strategy.train(self.pool, new_indices)
 
         # Evaluate model
-        val_stats = evaluate_model(self.model, self.strategy.criterion, self.cfg.batch_size, dataset=self.val_dataset,
-                                   device=self.cfg.device)
+        val_stats = evaluate_model(
+            self.model,
+            self.strategy.criterion,
+            self.cfg.batch_size,
+            dataset=self.val_dataset,
+            device=self.cfg.device,
+            include_advanced_metrics=True,
+        )
 
         # Keep in memory last performance
         self._update_last_stats(val_stats)
@@ -285,6 +292,13 @@ class ActiveLearning:
             f"Time: {training_stats['training_time']:.1f}s  |  "
             f"Samples trained: {training_stats.get('total_samples', '?'):,}"
         )
+        tqdm.write(
+            "      "
+            f"Alpha: {self._format_optional_metric(val_stats.get('spectral_alpha'))}  |  "
+            f"NC1: {self._format_optional_metric(val_stats.get('nc1_ratio'))}  |  "
+            f"CKA: {self._format_optional_metric(val_stats.get('cka'))}  |  "
+            f"dW: {self._format_optional_metric(val_stats.get('l2_weight_distance'))}"
+        )
 
         self.current_round += 1
         return round_stats
@@ -300,6 +314,17 @@ class ActiveLearning:
         self.last_stats["f1_score"] =  val_stats["f1_score"]
         self.last_stats["loss"] = val_stats["loss"]
         self.last_stats["accuracy"] = val_stats["accuracy"]
+
+    @staticmethod
+    def _format_optional_metric(value) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            if not np.isfinite(value):
+                return "n/a"
+        except TypeError:
+            return "n/a"
+        return f"{value:.4f}"
 
     def sample_next_batch(self) -> List[int]:
         """
@@ -418,14 +443,27 @@ class ActiveLearning:
             tqdm.write(f"\n  Stopped at round {self.current_round} (early stopping / timeout / no unlabeled data)")
 
         tqdm.write(f"\n  [Eval] Running final evaluation on test set...")
-        metrics = evaluate_model(self.model, self.strategy.criterion, self.cfg.batch_size, dataset=self.test_dataset,
-                                 device=self.cfg.device)
+        metrics = evaluate_model(
+            self.model,
+            self.strategy.criterion,
+            self.cfg.batch_size,
+            dataset=self.test_dataset,
+            device=self.cfg.device,
+            include_advanced_metrics=True,
+        )
         self.final_test_stats = metrics
         self.confusion_matrix = compute_confusion_matrix(self.model, self.test_dataset, self.cfg.batch_size)
         tqdm.write(
             f"  [Eval] Test F1: {metrics['f1_score']:.4f}  |  "
             f"Test Acc: {metrics['accuracy']:.4f}  |  "
             f"Test Loss: {metrics['loss']:.4f}\n"
+        )
+        tqdm.write(
+            "         "
+            f"Alpha: {self._format_optional_metric(metrics.get('spectral_alpha'))}  |  "
+            f"NC1: {self._format_optional_metric(metrics.get('nc1_ratio'))}  |  "
+            f"CKA: {self._format_optional_metric(metrics.get('cka'))}  |  "
+            f"dW: {self._format_optional_metric(metrics.get('l2_weight_distance'))}\n"
         )
         return metrics
 
