@@ -1,0 +1,40 @@
+{
+  "signals": [
+    "delta_f1",
+    "delta_accuracy",
+    "delta_loss",
+    "gradient_norm",
+    "l2_weight_distance",
+    "cka",
+    "delta_spectral_alpha",
+    "delta_nc"
+  ],
+  "normalizers": {
+    "delta_f1": 0.024534866875472905,
+    "delta_accuracy": 0.026000000000000023,
+    "delta_loss": 0.01597188855521381,
+    "gradient_norm": 145.95560194755578,
+    "l2_weight_distance": 1.5503606796264648,
+    "cka": 0.07802468538284302,
+    "delta_spectral_alpha": 0.00029430329550561574,
+    "delta_nc": 8.931209564208984
+  },
+  "from_round": {
+    "delta_f1": 2,
+    "delta_accuracy": 2,
+    "delta_loss": 2,
+    "gradient_norm": 1,
+    "l2_weight_distance": 2,
+    "cka": 2,
+    "delta_spectral_alpha": 2,
+    "delta_nc": 2
+  },
+  "calibration_run": {
+    "data": "imdb",
+    "seed": 42,
+    "rounds": 15,
+    "model": "distilbert-base-uncased",
+    "random_subset_size": 1000
+  },
+  "normalization_method": "max over rounds 2..5 of switching value (1-CKA for cka)"
+}

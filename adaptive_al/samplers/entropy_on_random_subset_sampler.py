@@ -38,6 +38,15 @@ class EntropyOnRandomSubsetSampler(EntropySampler):
         """
         super().__init__(**kwargs)
         self.random_subset_size = random_subset_size
+        # Private RNG owned by this sampler. Without this, get_unlabeled_indices
+        # would call global random.sample(), so any code that consumes Python's
+        # global RNG between rounds (model forward passes, gradient norm in
+        # train mode, signal computation) would shift the subset selection.
+        # That made HybridAL pre-switch and pure Retrain produce different
+        # sample sequences for the same seed even though the training code is
+        # identical pre-switch. Owning a separate Random(seed) makes the
+        # subset selection reproducible regardless of in-between RNG activity.
+        self._rng = random.Random(self.seed)
 
     def get_unlabeled_indices(self, pool: DataPool):
         """
@@ -55,5 +64,5 @@ class EntropyOnRandomSubsetSampler(EntropySampler):
         """
         unlabeled_indices = pool.get_unlabeled_indices()
         if len(unlabeled_indices) > self.random_subset_size:
-            unlabeled_indices = random.sample(unlabeled_indices, self.random_subset_size)
+            unlabeled_indices = self._rng.sample(unlabeled_indices, self.random_subset_size)
         return unlabeled_indices

@@ -1,10 +1,57 @@
+# =============================================================================
+# WHITELIST approach: ignore everything by default; re-include only the
+# paper-essential code. Anything not explicitly re-included below is
+# considered build artifact / runtime / scratch / data and stays out of
+# the repo.
+#
+# What lives in the repo:
+#   .gitignore  README.md  requirements.txt  main.py
+#   _calibration_normalizers.json   (paper-input artifact)
+#   adaptive_al/      — model + AL strategies + samplers + evaluation
+#   experiments_lib/  — experiment runners + aggregators + shared utils
+#   tools/            — paper-figure utilities (monitor, figure_plotter, etc.)
+#
+# Everything else (data/, experiments/, results/, scratch/, media/,
+# eda_preprocessing/, _*.py runtime scripts, *.log, *.ipynb, etc.) is
+# ignored.
+#
+# Important: gitignore only blocks NEW untracked paths. Files that were
+# added to the index before this rule took effect remain tracked. To
+# clear them:
+#     git rm -r --cached <path>
+#     git commit -m "stop tracking <path>"
+# =============================================================================
 
-results/
-run.log
-.idea/
+# Ignore everything at the repo root.
+*
+
+# Re-include the small set of paper-essential top-level files.
+!/.gitignore
+!/README.md
+!/requirements.txt
+!/main.py
+!/_calibration_normalizers.json
+
+# Re-include the paper-essential code directories (the dir entry first,
+# then everything inside it recursively).
+!/adaptive_al/
+!/adaptive_al/**
+!/experiments_lib/
+!/experiments_lib/**
+!/tools/
+!/tools/**
+
+# Re-ignore Python / IDE / env build artifacts that may sit inside the
+# code dirs above.
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.venv/
+.idea/
 .env
-best_hyperparams.json
+.claude/
+
+# Re-ignore any local OS metadata files that might creep in.
+.DS_Store
+Thumbs.db

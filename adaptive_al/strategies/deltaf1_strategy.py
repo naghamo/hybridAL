@@ -27,7 +27,11 @@ from tqdm import tqdm
 from .base_strategy import BaseStrategy
 from ..pool import DataPool
 
-from ..evaluation import evaluate_model
+from ..evaluation import (
+    evaluate_model,
+    calculate_user_spectral_alpha,
+    calculate_within_class_variance,
+)
 
 from .fine_tuning_strategy import FineTuneStrategy
 from .retrain_strategy import RetrainStrategy
@@ -91,15 +95,16 @@ class DeltaF1Strategy(BaseStrategy):
         self.fine_tune = FineTuneStrategy(strategy=self)
         self.retrain = RetrainStrategy(strategy=self)
 
-    def _calc_signal(self, val_dataset) -> float:
+    def _calc_signal(self, val_dataset, pool=None) -> float:
         """
-        Compute the monitoring signal on the fixed validation set.
+        Compute the raw quantity behind the active monitoring signal. The
+        caller (_compute_active_signal_value) handles delta semantics where
+        applicable.
 
         Args:
             val_dataset: The fixed validation dataset.
-
-        Returns:
-            float: Signal value (higher = better for all signals; loss is negated).
+            pool: Optional DataPool; only used by signals that need labeled
+                training data (e.g. delta_nc).
         """
         if self.signal in ("delta_f1", "delta_loss", "delta_accuracy"):
             stats = evaluate_model(self.model, self.criterion, self.batch_size,
@@ -126,12 +131,21 @@ class DeltaF1Strategy(BaseStrategy):
             return stats[self.signal]
         elif self.signal == "gradient_norm":
             return self._calc_gradient_norm(val_dataset)
+        elif self.signal == "delta_spectral_alpha":
+            return calculate_user_spectral_alpha(self.model)
+        elif self.signal == "delta_nc":
+            if pool is None:
+                raise ValueError("delta_nc requires the DataPool (for labeled data)")
+            labeled_subset = pool.get_labeled_subset()
+            return calculate_within_class_variance(
+                self.model, labeled_subset, self.batch_size, self.device,
+            )
         else:
             raise ValueError(
                 f"Unknown signal '{self.signal}'. "
                 "Choose from: 'delta_f1', 'delta_loss', 'delta_accuracy', "
                 "'gradient_norm', 'spectral_alpha', 'nc1_ratio', 'cka', "
-                "'l2_weight_distance'."
+                "'l2_weight_distance', 'delta_spectral_alpha', 'delta_nc'."
             )
 
     def _calc_gradient_norm(self, val_dataset) -> float:
@@ -168,22 +182,30 @@ class DeltaF1Strategy(BaseStrategy):
         self.model.eval()
         return norm
 
-    def _compute_active_signal_value(self, val_dataset) -> float:
+    # Signals whose switching value is |raw_t - raw_{t-1}| (absolute change).
+    _DELTA_STYLE_SIGNALS = (
+        "delta_f1", "delta_accuracy", "delta_loss",
+        "delta_spectral_alpha", "delta_nc",
+    )
+
+    def _compute_active_signal_value(self, val_dataset, pool=None) -> float:
         """
         Map _calc_signal into a "small = stabilized" scalar comparable to
         epsilon. Round 1 returns +inf for any signal that needs a previous
         round, so switching can never trigger on the first round.
 
-        - delta_f1/delta_accuracy/delta_loss : |metric_t - metric_{t-1}|
-        - cka                                 : 1 - CKA_t   (raw CKA → 1 at stable)
+        - delta_f1/delta_accuracy/delta_loss   : |metric_t - metric_{t-1}|
+        - delta_spectral_alpha                  : |α_t - α_{t-1}|
+        - delta_nc                              : |NC_t - NC_{t-1}|
+        - cka                                   : 1 - CKA_t   (raw CKA → 1 at stable)
         - gradient_norm, l2_weight_distance,
-          spectral_alpha, nc1_ratio           : raw value (already small-=-stable)
+          spectral_alpha, nc1_ratio             : raw value (already small=stable)
         """
-        raw = self._calc_signal(val_dataset)
+        raw = self._calc_signal(val_dataset, pool=pool)
 
-        if self.signal in ("delta_f1", "delta_accuracy", "delta_loss"):
-            # _calc_signal returns the metric (F1 / accuracy / -loss);
-            # switching value is the absolute round-to-round change.
+        if self.signal in self._DELTA_STYLE_SIGNALS:
+            if raw is None or not (raw == raw):  # nan / None
+                return float("inf")
             if self._prev_metric is None:
                 self._prev_metric = raw
                 return float("inf")
@@ -192,27 +214,27 @@ class DeltaF1Strategy(BaseStrategy):
             return value
 
         if self.signal == "cka":
-            # NaN at round 1 (no previous representations); treat as +inf so
-            # the first round does not count as stabilized.
-            if not (raw == raw):  # NaN check without importing math
+            if not (raw == raw):
                 return float("inf")
             return 1.0 - raw
 
         # gradient_norm, l2_weight_distance, spectral_alpha, nc1_ratio:
-        # raw is already in "small = stabilized" form. l2 may legitimately be
-        # +inf at round 1 (no previous weight snapshot).
+        # raw is already in "small = stabilized" form.
         if not (raw == raw):
             return float("inf")
         return raw
 
     def _train_implementation(self, pool: DataPool, new_indices: List[int]) -> Dict:
         """
-        Train using retrain or fine-tune strategy based on signal stabilization.
+        Run this round's training only — pure retrain pre-switch, fine-tune post-switch.
 
-        After each retraining round we compute the active signal in
-        "small = stabilized" form, optionally normalize by self.signal_normalizer
-        (a calibration constant), and switch to fine-tuning once the normalized
-        value stays below epsilon for k consecutive rounds.
+        The switching decision is taken later in `update_switching_state(...)`,
+        which the AL loop calls after `_compute_round_signals` has run. Doing it
+        there lets HybridAL reuse the signal value already computed by
+        `log_all_signals` instead of triggering an extra forward (and, for
+        gradient_norm, an extra backward) pass that would advance the global
+        CUDA RNG and silently desynchronize the next round's dropout from a
+        Retrain-only run.
 
         Args:
             pool (DataPool): Current data pool with labeled/unlabeled splits.
@@ -222,13 +244,63 @@ class DeltaF1Strategy(BaseStrategy):
             Dict: Training statistics from the underlying strategy.
         """
         self._internal_round += 1
-
         if self.switched:
             return self.fine_tune._train_implementation(pool, new_indices)
+        return self.retrain._train_implementation(pool, new_indices)
 
-        stats = self.retrain._train_implementation(pool, new_indices)
+    # Maps each signal name to the field in the per-round signals dict produced
+    # by AdaptiveActiveLearner._compute_round_signals; the value found there is
+    # already in "small = stabilized" form except for cka (raw CKA in [-1, 1]).
+    _SIGNAL_FROM_DICT = {
+        "delta_f1": "delta_f1",
+        "delta_accuracy": "delta_accuracy",
+        "delta_loss": "delta_loss",
+        "gradient_norm": "gradient_norm",
+        "l2_weight_distance": "l2_weight_distance",
+        "cka": "cka",
+        "delta_spectral_alpha": "delta_spectral_alpha",
+        "delta_nc": "delta_nc",
+    }
 
-        switching_value = self._compute_active_signal_value(pool.val_dataset)
+    def _signal_value_from_dict(self, signals: Dict[str, float]) -> float:
+        """Pull the active signal's switching value from a precomputed dict.
+
+        Returns +inf if the signal is missing or NaN; applies the cka-specific
+        1-x transform so the result is comparable to epsilon (small = stable).
+        """
+        key = self._SIGNAL_FROM_DICT.get(self.signal)
+        if key is None or signals is None or key not in signals:
+            return float("inf")
+        raw = signals[key]
+        try:
+            if raw is None or raw != raw:
+                return float("inf")
+        except TypeError:
+            return float("inf")
+        if self.signal == "cka":
+            return 1.0 - raw
+        return raw
+
+    def update_switching_state(
+        self,
+        val_dataset=None,
+        signals: Optional[Dict[str, float]] = None,
+        pool: Optional[DataPool] = None,
+    ) -> None:
+        """Decide whether to switch to FineTune for this round.
+
+        Called by the AL loop after the round's val stats and per-round signals
+        have been computed. Prefers the precomputed `signals` dict (zero extra
+        compute → identical CUDA RNG state to a Retrain-only run); falls back
+        to its own forward pass when log_all_signals=False.
+        """
+        if self.switched:
+            return
+
+        if signals is not None and self.signal in self._SIGNAL_FROM_DICT:
+            switching_value = self._signal_value_from_dict(signals)
+        else:
+            switching_value = self._compute_active_signal_value(val_dataset, pool=pool)
 
         normalized = switching_value
         if (self.signal_normalizer is not None
@@ -250,11 +322,13 @@ class DeltaF1Strategy(BaseStrategy):
             "nc1_ratio": "NC1",
             "cka": "1-CKA",
             "l2_weight_distance": "dW",
+            "delta_spectral_alpha": "Δα",
+            "delta_nc": "ΔNC",
         }.get(self.signal, self.signal)
         raw_str = "inf" if switching_value == float("inf") else f"{switching_value:.6f}"
         norm_str = "inf" if normalized == float("inf") else f"{normalized:.6f}"
 
-        if self.count >= self.k and not self.switched:
+        if self.count >= self.k:
             self.switch_round = self._internal_round
             self.switched = True
             tqdm.write(
@@ -271,5 +345,3 @@ class DeltaF1Strategy(BaseStrategy):
                 f"  [HybridAL] {signal_label}={raw_str}  norm={norm_str}  "
                 f"ε={self.epsilon}  →  {status}"
             )
-
-        return stats

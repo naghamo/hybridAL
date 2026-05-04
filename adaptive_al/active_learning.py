@@ -35,7 +35,16 @@ import adaptive_al.samplers as samplers
 # Used in data loading eval string
 from .utils.data_loader import load_agnews, load_imdb, load_jigsaw, load_sst2, load_tweeteval, load_yahoo_answers
 
-from .evaluation import evaluate_model, compute_confusion_matrix, initialize_evaluation_state
+from .evaluation import (
+    evaluate_model,
+    compute_confusion_matrix,
+    initialize_evaluation_state,
+    calculate_user_spectral_alpha,
+    calculate_within_class_variance,
+    calculate_linear_cka,
+    _collect_representations,
+    _flatten_trainable_parameters,
+)
 
 
 class ActiveLearning:
@@ -199,6 +208,17 @@ class ActiveLearning:
         # For computing absolute deltas of f1/accuracy/loss across rounds
         # whenever log_all_signals=True. Filled in train_one_round.
         self._prev_signal_metrics: Optional[Dict[str, float]] = None
+        # Previous-round raw values for the new delta-style signals.
+        self._prev_alpha: Optional[float] = None
+        self._prev_nc: Optional[float] = None
+        # Round-1 references used to compute "vs round 1" stability metrics
+        # (||theta_t - theta_1||, CKA(reps_t, reps_1), |alpha_t - alpha_1|,
+        # |NC_t - NC_1|). All cached on the first call to _compute_round_signals
+        # since that runs after round 1's training.
+        self._theta_round1: Optional[torch.Tensor] = None  # CPU float
+        self._reps_round1: Optional[torch.Tensor] = None   # CPU float (n, dim)
+        self._alpha_round1: Optional[float] = None
+        self._nc_round1: Optional[float] = None
 
     def _load_data(self):
         """
@@ -290,6 +310,16 @@ class ActiveLearning:
         if self.cfg.log_all_signals:
             round_stats["signals"] = self._compute_round_signals(val_stats)
 
+        # HybridAL switching decision happens here, after the per-round signals
+        # have been computed, so the strategy can reuse them instead of doing
+        # an extra forward pass that would advance the global CUDA RNG and
+        # desynchronize the next round's dropout from a Retrain-only run.
+        self.strategy.update_switching_state(
+            val_dataset=self.val_dataset,
+            signals=round_stats.get("signals"),
+            pool=self.pool,
+        )
+
         self.round_stats.append(round_stats)
         tqdm.write(
             f"  {trend} Val F1: {val_stats['f1_score']:.4f} ({delta_str})  |  "
@@ -362,6 +392,98 @@ class ActiveLearning:
 
         grad_norm = self._compute_gradient_norm(self.val_dataset)
 
+        # User-defined spectral-alpha (svdvals + log-log slope, averaged over Linear layers).
+        try:
+            alpha_t = calculate_user_spectral_alpha(self.model)
+        except Exception:
+            alpha_t = float("nan")
+        delta_alpha = float("inf")
+        if self._prev_alpha is not None and alpha_t == alpha_t:
+            delta_alpha = abs(alpha_t - self._prev_alpha)
+        if alpha_t == alpha_t:
+            self._prev_alpha = alpha_t
+
+        # Within-class variance of [CLS] reps over the current labeled pool.
+        try:
+            labeled_subset = self.pool.get_labeled_subset()
+            nc_t = calculate_within_class_variance(
+                self.model, labeled_subset, self.cfg.batch_size, self.cfg.device,
+            )
+        except Exception:
+            nc_t = float("nan")
+        delta_nc = float("inf")
+        if self._prev_nc is not None and nc_t == nc_t:
+            delta_nc = abs(nc_t - self._prev_nc)
+        if nc_t == nc_t:
+            self._prev_nc = nc_t
+
+        # Per-round stability metrics that do NOT depend on round t-1:
+        #   weight_norm           = ||theta_t||_2
+        #   l2_vs_round1          = ||theta_t - theta_1||_2
+        #   cka_vs_round1         = linear CKA(reps_t, reps_1)
+        #   alpha_vs_round1       = |alpha_t - alpha_1|
+        #   nc_vs_round1          = |NC_t - NC_1|
+        # Round 1 is its own reference, so the round-1 values are 0 / 1 / 0 / 0
+        # by convention.
+        try:
+            flat_theta = _flatten_trainable_parameters(self.model).cpu().float()
+            weight_norm = float(torch.norm(flat_theta, p=2).item())
+        except Exception:
+            flat_theta = None
+            weight_norm = float("nan")
+
+        # NOTE: use the FIXED-size validation set as the CKA reference, NOT
+        # pool.get_labeled_subset() — the labeled pool grows each round, so
+        # reps_t (e.g. 232x768) wouldn't match reps_round1 (e.g. 200x768) and
+        # calculate_linear_cka would return NaN for every round t>1.
+        try:
+            reps_t, _labels_t = _collect_representations(
+                self.model, self.val_dataset, self.cfg.batch_size, self.cfg.device,
+            )
+            reps_t = reps_t.cpu().float()
+        except Exception:
+            reps_t = None
+
+        if self._theta_round1 is None and flat_theta is not None:
+            self._theta_round1 = flat_theta.clone()
+            l2_vs_round1 = 0.0
+        elif flat_theta is not None and self._theta_round1 is not None:
+            try:
+                l2_vs_round1 = float(
+                    torch.norm(flat_theta - self._theta_round1, p=2).item()
+                )
+            except Exception:
+                l2_vs_round1 = float("nan")
+        else:
+            l2_vs_round1 = float("nan")
+
+        if self._reps_round1 is None and reps_t is not None:
+            self._reps_round1 = reps_t.clone()
+            cka_vs_round1 = 1.0
+        elif reps_t is not None and self._reps_round1 is not None:
+            try:
+                cka_vs_round1 = float(calculate_linear_cka(reps_t, self._reps_round1))
+            except Exception:
+                cka_vs_round1 = float("nan")
+        else:
+            cka_vs_round1 = float("nan")
+
+        if self._alpha_round1 is None and (alpha_t == alpha_t):
+            self._alpha_round1 = alpha_t
+            alpha_vs_round1 = 0.0
+        elif self._alpha_round1 is not None and (alpha_t == alpha_t):
+            alpha_vs_round1 = abs(alpha_t - self._alpha_round1)
+        else:
+            alpha_vs_round1 = float("nan")
+
+        if self._nc_round1 is None and (nc_t == nc_t):
+            self._nc_round1 = nc_t
+            nc_vs_round1 = 0.0
+        elif self._nc_round1 is not None and (nc_t == nc_t):
+            nc_vs_round1 = abs(nc_t - self._nc_round1)
+        else:
+            nc_vs_round1 = float("nan")
+
         return {
             "delta_f1": float(delta_f1),
             "delta_accuracy": float(delta_accuracy),
@@ -369,6 +491,17 @@ class ActiveLearning:
             "gradient_norm": float(grad_norm),
             "l2_weight_distance": float(val_stats.get("l2_weight_distance", float("nan"))),
             "cka": float(val_stats.get("cka", float("nan"))),
+            "delta_spectral_alpha": float(delta_alpha),
+            "delta_nc": float(delta_nc),
+            # Also log raw alpha/NC for trajectory plots.
+            "_raw_spectral_alpha": float(alpha_t),
+            "_raw_nc": float(nc_t),
+            # Per-round stability metrics (no comparison to t-1).
+            "weight_norm": float(weight_norm),
+            "l2_vs_round1": float(l2_vs_round1),
+            "cka_vs_round1": float(cka_vs_round1),
+            "alpha_vs_round1": float(alpha_vs_round1),
+            "nc_vs_round1": float(nc_vs_round1),
         }
 
     def _compute_gradient_norm(self, val_dataset) -> float:

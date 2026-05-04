@@ -340,6 +340,10 @@ class BaseStrategy(ABC):
         """
         pass
 
+    def update_switching_state(self, val_dataset=None, signals=None, pool=None) -> None:
+        """No-op for non-adaptive strategies; HybridAL overrides this."""
+        return None
+
     def pass_args_to_sampler(self) -> Dict[str, Any]:
         """
         Provide arguments to be passed to the sampler.

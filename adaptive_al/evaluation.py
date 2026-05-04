@@ -257,6 +257,88 @@ def calculate_linear_cka(
     return float((hsic_xy / denom).item())
 
 
+def calculate_user_spectral_alpha(model: torch.nn.Module) -> float:
+    """
+    Per-Linear-layer power-law exponent of the singular-value spectrum, averaged.
+
+    For each nn.Linear weight matrix W:
+      - svals = torch.linalg.svdvals(W)  (descending after sort)
+      - fit log(rank) -> log(svals) via linear regression
+      - layer_alpha = -slope
+    Return mean across layers. Returns nan if no layer yields a usable spectrum.
+
+    Used as the raw value behind the "delta_spectral_alpha" switching signal,
+    where the strategy compares |alpha_t - alpha_{t-1}|.
+    """
+    from scipy.stats import linregress
+
+    alphas = []
+    with torch.no_grad():
+        for module in model.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            W = module.weight.detach()
+            try:
+                sv = torch.linalg.svdvals(W).cpu().numpy()
+            except Exception:
+                continue
+            sv = sv[sv > 1e-8]
+            if sv.size < 3:
+                continue
+            sv = np.sort(sv)[::-1]
+            ranks = np.arange(1, sv.size + 1)
+            log_rank = np.log(ranks)
+            log_sv = np.log(sv)
+            try:
+                slope = linregress(log_rank, log_sv).slope
+            except Exception:
+                continue
+            if not np.isfinite(slope):
+                continue
+            alphas.append(-float(slope))
+    if not alphas:
+        return float("nan")
+    return float(np.mean(alphas))
+
+
+def calculate_within_class_variance(
+        model: torch.nn.Module,
+        labeled_dataset: torch.utils.data.Dataset,
+        batch_size: int,
+        device: str = "cuda",
+) -> float:
+    """
+    Within-class variance of penultimate ([CLS]) representations on labeled data.
+
+    For each class c with n_c samples and per-sample reps h_i:
+      mu_c = (1/n_c) Σ h_i
+      var_c = (1/n_c) Σ ||h_i - mu_c||^2
+    Return mean of var_c across classes (skipping classes with < 2 samples).
+    Used as the raw value behind the "delta_nc" switching signal.
+    """
+    representations, labels = _collect_representations(
+        model, labeled_dataset, batch_size, device,
+    )
+    if representations.numel() == 0:
+        return float("nan")
+
+    H = representations.float()
+    L = labels.long()
+    classes = torch.unique(L)
+    var_per_class = []
+    for c in classes:
+        mask = L == c
+        if int(mask.sum().item()) < 2:
+            continue
+        Hc = H[mask]
+        mu = Hc.mean(dim=0, keepdim=True)
+        mse = ((Hc - mu) ** 2).sum(dim=1).mean().item()
+        var_per_class.append(float(mse))
+    if not var_per_class:
+        return float("nan")
+    return float(np.mean(var_per_class))
+
+
 def calculate_l2_weight_distance(model: torch.nn.Module) -> float:
     """
     Compute ||θ_t - θ_{t-1}||_2: the L2 distance between current trainable
