@@ -3,19 +3,23 @@
 Walks `experiments/hyperparameter_tuning/`, groups runs by their HybridAL
 `signal`, and for each signal independently:
   1. Pivots the 16 (ε, k) cells across the (dataset × seed) replicas.
-  2. Picks the best (ε, k) using argmax mean **validation** F1 (NOT test —
-     test is held out for final reporting only, picking on it would be
-     data leakage), with a tie-break of "prefer the EARLIEST mean switch
-     round" within 0.5 % val F1 of the top.
+  2. Picks the best (ε, k) by:
+       a. Filter to cells whose mean **validation** F1 is within 0.5 %
+          of the grid top (val, NOT test — test is held out for final
+          reporting; picking on it would be data leakage).
+       b. Among those, argmin the **switch-rate-weighted training time**
+              T_eff(ε, k) = mean_training_time / switch_rate.
+          Cells that never fire on any run get switch_rate = 0 and
+          therefore T_eff = +∞ (ranked last).
 
-     Rationale for the tie-break: HybridAL's reason to exist is saving
-     compute while preserving performance. The 0.5 % tolerance already
-     guarantees performance is preserved (within seed noise). Among
-     equally-performing configs, the one that switches EARLIEST gets
-     more rounds of cheap FineTune training and therefore the most
-     time savings. Configs that never switch in some runs deliver zero
-     time savings on those runs, so they're ranked LAST (treated as
-     mean switch round = +∞).
+     Rationale: HybridAL's reason to exist is saving compute while
+     preserving performance. The 0.5 % F1 tolerance already guarantees
+     performance is statistically equivalent to the grid top (within
+     seed noise). Among equally-performing cells, T_eff measures the
+     *reliable* time savings — a cell that fires on only some seeds
+     gets penalised because T_eff divides its mean training time by
+     the firing rate. This rewards cells that both switch early and
+     switch consistently across seeds.
   3. Writes:
        - chosen_eps_k_<signal>.json  (the picked pair + diagnostics)
        - plots/heatmap_<signal>.png  (ε × k heatmap)
@@ -82,21 +86,23 @@ def _make_heatmap(by_eps_k_f1: dict, signal: str, save_path: Path) -> None:
 
 
 def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
-                     by_eps_k_test_f1: dict) -> dict:
-    """Pick (ε, k) for one signal: argmax mean **val** F1, tie-break prefers
-    the EARLIEST mean switch round within 0.5 % val F1 of the top.
+                     by_eps_k_test_f1: dict, by_eps_k_time: dict) -> dict:
+    """Pick (ε, k) for one signal: argmin T_eff among cells whose mean
+    val F1 is within 0.5 % of the grid top.
 
-    Why val (not test): test set is held out for final reporting in Exp 3.
-    Selecting hyperparameters on test F1 would be data leakage.
+        T_eff(ε, k) = mean_training_time(ε, k) / switch_rate(ε, k)
 
-    Why "earliest switch" as tie-break: among configs that achieve
-    statistically equivalent val F1 (within 0.5 %), the one that switches
-    EARLIEST delivers the most time savings, which is HybridAL's whole
-    raison d'être. Performance is already guaranteed by the val-F1
-    tolerance; this prioritises the time benefit among equal performers.
-    Configs that never switched on at least one of their replicas deliver
-    no time savings on that run, so we treat their effective switch
-    round as +∞ and rank them LAST.
+    Why val F1 (not test): test set is held out for final reporting in
+    Exp 3; selecting on test would be data leakage.
+
+    Why T_eff as the tie-break: among cells with equivalent val F1, we
+    want the one that delivers reliable time savings. Raw mean training
+    time alone rewards cells that happen to be cheap on some runs while
+    failing to fire on others (zero algorithmic value). Dividing by
+    switch_rate = (# of replicas where the strategy actually fired) /
+    (total # of replicas) penalises unreliable cells: a cell that fires
+    in only half of its 6 replicas gets 2× the T_eff of the same raw
+    time on a fully-firing cell.
     """
     val_means = {k: safe_mean(v) for k, v in by_eps_k_val_f1.items() if v}
     if not val_means:
@@ -104,22 +110,27 @@ def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
     top = max(val_means.values())
     cands = [k for k, m in val_means.items() if top - m <= TIE_BREAK_F1_TOL]
 
-    # Among ties, prefer the SMALLEST mean switch round (most time savings).
-    # If any of the cell's replicas never switched, treat its mean switch
-    # round as +∞ so it's ranked LAST among ties.
-    NEVER_SWITCHED = float("inf")
-    def _mean_switch(key):
+    NEVER_FIRED = float("inf")
+    def _t_eff(key):
         sws = by_eps_k_switch.get(key, [])
-        if not sws:
-            return NEVER_SWITCHED
-        if any(s is None for s in sws):
-            return NEVER_SWITCHED
-        return mean(sws)
+        ts = by_eps_k_time.get(key, [])
+        if not sws or not ts:
+            return NEVER_FIRED, None, None
+        rate = sum(0 if s is None else 1 for s in sws) / len(sws)
+        if rate == 0:
+            return NEVER_FIRED, mean(ts), 0.0
+        return mean(ts) / rate, mean(ts), rate
 
-    # Sort: earliest switch first (smaller is better); on tie, smaller k.
-    cands.sort(key=lambda k: (_mean_switch(k), k[1]))
+    # Sort: smallest T_eff first; on tie, smaller k (preserves the old
+    # secondary key so behaviour is deterministic).
+    cands.sort(key=lambda k: (_t_eff(k)[0], k[1]))
     eps, k = cands[0]
-    sw = _mean_switch((eps, k))
+    teff, tmean, rate = _t_eff((eps, k))
+
+    # Diagnostic: also report mean switch round (over fired replicas).
+    sw_list = [s for s in by_eps_k_switch.get((eps, k), []) if s is not None]
+    sw_mean = mean(sw_list) if sw_list else None
+
     return {
         "epsilon": eps,
         "k": k,
@@ -127,10 +138,13 @@ def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
         "mean_test_f1_at_chosen": safe_mean(by_eps_k_test_f1.get((eps, k), [])),
         "best_val_f1_among_grid": top,
         "tie_break_within_val_f1": TIE_BREAK_F1_TOL,
-        "tie_break_rule": "prefer EARLIEST mean switch round (max time savings)",
+        "tie_break_rule": "argmin T_eff = mean_training_time / switch_rate",
         "n_tied_candidates": len(cands),
-        "mean_switch_round": (sw if sw != NEVER_SWITCHED else None),
-        "all_replicas_switched": (sw != NEVER_SWITCHED),
+        "mean_train_time_s": tmean,
+        "switch_rate": rate,
+        "T_eff_s": (teff if teff != NEVER_FIRED else None),
+        "mean_switch_round": sw_mean,
+        "all_replicas_switched": rate == 1.0 if rate is not None else False,
     }
 
 
@@ -149,6 +163,7 @@ def main(args: argparse.Namespace) -> None:
     # would be data leakage.
     by_signal_eps_k_f1 = defaultdict(lambda: defaultdict(list))   # final-round val F1
     by_signal_eps_k_sw = defaultdict(lambda: defaultdict(list))
+    by_signal_eps_k_time = defaultdict(lambda: defaultdict(list))
     by_signal_eps_k_test = defaultdict(lambda: defaultdict(list)) # diagnostic only
     for r in rows_summary:
         sig = r.get("signal")
@@ -160,6 +175,8 @@ def main(args: argparse.Namespace) -> None:
         by_signal_eps_k_f1[sig][key].append(float(val_f1))
         if r.get("test_f1") is not None:
             by_signal_eps_k_test[sig][key].append(float(r["test_f1"]))
+        if r.get("training_time_total") is not None:
+            by_signal_eps_k_time[sig][key].append(float(r["training_time_total"]))
         sw = r.get("switch_round")
         try:
             sw_val = int(sw) if sw is not None else None
@@ -185,7 +202,8 @@ def main(args: argparse.Namespace) -> None:
         _make_heatmap(val_pivot, signal, out_plot)
 
         # Choose
-        chosen = _pick_best_eps_k(val_pivot, sw_pivot, test_pivot)
+        time_pivot = by_signal_eps_k_time[signal]
+        chosen = _pick_best_eps_k(val_pivot, sw_pivot, test_pivot, time_pivot)
         chosen["signal"] = signal
         out_json = SAVE_ROOT / f"chosen_eps_k_{signal}.json"
         out_json.write_text(json.dumps(chosen, indent=2))
@@ -198,6 +216,12 @@ def main(args: argparse.Namespace) -> None:
                   else "never (some replicas)")
         test_str = (f"{chosen['mean_test_f1_at_chosen']:.4f}"
                     if chosen.get("mean_test_f1_at_chosen") is not None else "n/a")
+        teff_str = (f"{chosen['T_eff_s']:.1f}~s"
+                    if chosen.get("T_eff_s") is not None else "n/a")
+        time_str = (f"{chosen['mean_train_time_s']:.1f}~s"
+                    if chosen.get("mean_train_time_s") is not None else "n/a")
+        rate_str = (f"{chosen['switch_rate']*100:.0f}%"
+                    if chosen.get("switch_rate") is not None else "n/a")
         report_lines += [
             "",
             f"=== signal = {signal} ===",
@@ -207,6 +231,8 @@ def main(args: argparse.Namespace) -> None:
             f"{chosen['n_tied_candidates']} candidates within "
             f"{chosen['tie_break_within_val_f1']*100:.1f}% of top)",
             f"  tie-break rule: {chosen['tie_break_rule']}",
+            f"  T_eff at chosen = {teff_str}  "
+            f"(mean training time = {time_str}; switch rate = {rate_str})",
             f"  mean test F1 at chosen (diagnostic only) = {test_str}",
             f"  mean switch round at chosen = {sw_str}",
             "",

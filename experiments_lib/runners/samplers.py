@@ -36,13 +36,16 @@ def add_extra_args(p: argparse.ArgumentParser) -> None:
 
 
 def make_plan(args: argparse.Namespace) -> ExperimentPlan:
+    # Datasets reduced to the same 3 used by Exp 5 (pool size) and Exp 6
+    # (batch size) — IMDb / AG News / Yahoo Answers — covering the full
+    # label-cardinality range (binary / 4-class / 10-class).
     return make_plan_from_grid(
         name=NAME,
         save_root=SAVE_ROOT,
         grid={
             "method":  ["Retrain", "HybridAL"],
             "sampler": SAMPLERS,
-            "dataset": C.ALL_DATASETS,
+            "dataset": C.DATASETS_3,
             "seed":    C.SEEDS_FULL,
         },
     )

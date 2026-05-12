@@ -39,8 +39,10 @@ class NewOnlyStrategy(BaseStrategy):
         samples for the configured number of epochs. All previously labeled
         data is ignored in this training round.
 
-        If no new indices are provided, returns zero statistics without training.
-        Uses batch size equal to the number of new samples.
+        If no new indices are provided (round 1), returns zero statistics
+        without training — the model is left at its pretrained initial
+        state. Uses a single batch per epoch (batch size equal to the number
+        of newly acquired samples).
 
         Args:
             pool (DataPool): Current data pool with labeled/unlabeled splits.
@@ -51,18 +53,12 @@ class NewOnlyStrategy(BaseStrategy):
                   and new_samples.
         """
         if not new_indices:
-            # Initial round: train on the full labeled pool (same as other strategies)
-            labeled_subset = pool.get_labeled_subset()
-            dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
-            total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
-            return self.get_stats(total_loss, num_batches, labeled_subset, [],
-                                  actual_epochs=actual_epochs)
+            return self.get_stats(0, 0, pool.get_subset([]), [], actual_epochs=0)
 
         pool.add_labeled_samples(new_indices)
 
         labeled_subset = pool.get_subset(new_indices)
-        dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
-
+        dataloader = DataLoader(labeled_subset, batch_size=len(new_indices), shuffle=True)
 
         total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)
 
