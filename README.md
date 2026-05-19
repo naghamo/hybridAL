@@ -95,10 +95,8 @@ training strategy to use*:
 │       ├── constants.py          # backbones, datasets, seeds
 │       ├── csv_io.py             # robust CSV read/write
 │       ├── plan.py               # experiment grid / plan
-│       ├── plots.py              # shared plotting helpers
 │       ├── runner.py             # per-config execution
-│       ├── signals.py            # the 8 candidate switching signals
-│       └── tables.py             # LaTeX table helpers
+│       └── signals.py            # the 8 candidate switching signals
 │
 ├── main.py                       # unified CLI (run / aggregate / list)
 ├── _calibration_normalizers.json # per-signal calibration normalizers
