@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-# ── helpers ──────────────────────────────────────────────────────────────── #
+
 
 STEPS = {
     "baselines":       "Step 1 — Baselines",
@@ -115,27 +115,27 @@ def parse_current_from_log(log_file):
     except Exception:
         return result
 
-    # Read backwards for efficiency
+
     for line in reversed(lines[-500:]):
         line = line.strip()
         if not line:
             continue
 
-        # Step header
+
         if "STEP" in line and "—" in line and result["current_step"] is None:
             result["current_step"] = line.strip().lstrip("=- ").rstrip("=- ")
 
-        # Experiment header: [N/M] StrategyName_...
+
         m = re.search(r'\[(\d+)/(\d+)\]\s+(\S+)', line)
         if m and result["current_exp"] is None:
             result["current_exp"] = m.group(3)[:60]
 
-        # Round info from tqdm: Round N | ...
+
         m = re.search(r'Round\s+(\d+)\s*\|.*?(\d+)\s*labeled', line)
         if m and result["current_round"] is None:
             result["current_round"] = int(m.group(1))
 
-        # Val F1 from round completion line
+
         m = re.search(r'Val F1:\s*([\d.]+)', line)
         if m and result["last_f1"] is None:
             result["last_f1"] = float(m.group(1))
@@ -144,18 +144,18 @@ def parse_current_from_log(log_file):
         if m and result["last_loss"] is None:
             result["last_loss"] = float(m.group(1))
 
-        # Rounds bar: Rounds: X%|... N/M
+
         m = re.search(r'Rounds.*?(\d+)/(\d+)', line)
         if m and result["total_rounds"] is None:
             result["current_round"] = int(m.group(1))
             result["total_rounds"]  = int(m.group(2))
 
-        # Epoch info
+
         m = re.search(r'Epoch\s+(\d+)/(\d+)', line)
         if m and result["current_epoch"] is None:
             result["current_epoch"] = f"{m.group(1)}/{m.group(2)}"
 
-        # Switch event
+
         if "SWITCHING to FineTune" in line and result["switched"] is None:
             m2 = re.search(r'round\s+(\d+)', line)
             result["switched"] = int(m2.group(1)) if m2 else True
@@ -163,7 +163,7 @@ def parse_current_from_log(log_file):
         if result["current_exp"] and result["last_f1"] is not None:
             break
 
-    # Count recent errors (last 200 lines)
+
     result["errors_recent"] = sum(1 for l in lines[-200:] if "ERROR" in l or "FAILED" in l)
     return result
 
@@ -203,7 +203,7 @@ def main():
     start_time  = time.time()
     start_total, _ = count_json_files(base_dir)
     prev_total  = start_total
-    rate_samples = []   # (time, count) for rolling rate
+    rate_samples = []
 
     print(f"  Watching: {base_dir}  |  Log: {args.log}")
     print("  Press Ctrl+C to stop.\n")
@@ -215,25 +215,25 @@ def main():
             elapsed = now - start_time
             new_since = total_done - start_total
 
-            # Rolling rate (last 5 samples)
+
             rate_samples.append((now, total_done))
             if len(rate_samples) > 5:
                 rate_samples.pop(0)
             if len(rate_samples) >= 2:
                 dt = rate_samples[-1][0] - rate_samples[0][0]
                 dn = rate_samples[-1][1] - rate_samples[0][1]
-                rate = dn / dt if dt > 0 else 0  # exp/sec
+                rate = dn / dt if dt > 0 else 0
             else:
                 rate = new_since / elapsed if elapsed > 0 else 0
 
-            # Last completed experiment
+
             last_path, last_mtime, last_info = get_last_result(base_dir)
             last_ago = f"{int(now - last_mtime)}s ago" if last_mtime else "—"
 
-            # Current activity from log
+
             cur = parse_current_from_log(args.log)
 
-            # ── render ────────────────────────────────────────────────────── #
+
             os.system("clear")
             ts = datetime.now().strftime("%H:%M:%S")
 
@@ -241,7 +241,7 @@ def main():
             print(f"  ║  HybridAL Experiment Monitor          {ts:>22}  ║")
             print(f"  ╚{'═'*62}╝")
 
-            # Overall progress
+
             print()
             if args.total:
                 remaining = args.total - total_done
@@ -256,7 +256,7 @@ def main():
                 if rate > 0:
                     print(f"  Rate: {rate*3600:.1f} exp/hr   Elapsed: {format_td(elapsed)}")
 
-            # Per-step breakdown
+
             print(f"\n  {'Step':<35} {'Done':>6}")
             print(f"  {'─'*42}")
             for key, label in STEPS.items():
@@ -266,12 +266,12 @@ def main():
             if not per_step:
                 print("  (no results yet)")
 
-            # Current activity
+
             print(f"\n  ── Currently running ──────────────────────────────")
             if cur["current_step"]:
                 print(f"  Step    : {cur['current_step']}")
             if cur["current_exp"]:
-                # Parse experiment name into readable parts
+
                 exp = cur["current_exp"]
                 print(f"  Exp     : {exp}")
             if cur["current_round"] is not None:
@@ -292,7 +292,7 @@ def main():
             if cur["errors_recent"] > 0:
                 print(f"  ⚠ Errors: {cur['errors_recent']} in last 200 log lines")
 
-            # Last completed experiment
+
             if last_info:
                 print(f"\n  ── Last completed ({last_ago}) ─────────────────────")
                 print(f"  Dataset  : {last_info.get('dataset','?'):<15}  "
@@ -314,7 +314,7 @@ def main():
                 if sw is not None:
                     print(f"  Switched : round {sw}")
 
-            # Delta since last check
+
             delta = total_done - prev_count if (prev_count := prev_total) else 0
             prev_total = total_done
             if delta > 0:

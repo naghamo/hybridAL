@@ -65,11 +65,11 @@ class TextClassificationDataset(Dataset):
         text = self.texts[idx]
         label = self.labels[idx]
 
-        # Tokenize the text
+
         encoding = self.tokenizer(text, **self.tokenizer_kwargs)
 
-        # The tokenizer returns a dictionary with batch dimension 1, so we squeeze it.
-        # The DataLoader will add the batch dimension back.
+
+
         inputs = {
             'input_ids': encoding['input_ids'].squeeze(),
             'attention_mask': encoding['attention_mask'].squeeze()

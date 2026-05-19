@@ -92,10 +92,10 @@ class BaseSampler(ABC):
         if len(unlabeled_indices) == 0:
             return []
 
-        # Don't sample more than available
+
         actual_batch_size = min(num_of_indices, len(unlabeled_indices))
 
-        # Random sampling without replacement
+
         selected_indices = random.sample(unlabeled_indices, actual_batch_size)
 
         return selected_indices

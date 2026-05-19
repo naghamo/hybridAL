@@ -93,7 +93,7 @@ def load_agnews(path="../data", val_size=0.01, seed=42, model_name_or_path="bert
 
     return (train_dataset, val_dataset, test_dataset), (df_train.reset_index(drop=True), df_val.reset_index(drop=True),
                                                         df_test.reset_index(
-                                                            drop=True))  # Also return raw dataframes for inspection
+                                                            drop=True))
 
 
 def load_imdb(path="../data", val_size=0.01, test_size=0.2, seed=42, model_name_or_path="bert-base-uncased",
@@ -123,7 +123,7 @@ def load_imdb(path="../data", val_size=0.01, test_size=0.2, seed=42, model_name_
                                                         tokenizer_kwargs or {})
 
     return (train_dataset, val_dataset, test_dataset), (df_train, df_val,
-                                                        df_test)  # return both tokenized and original dfs
+                                                        df_test)
 
 
 def load_jigsaw(path="../data", val_size=0.01, test_size=0.2, seed=42, model_name_or_path="bert-base-uncased",
@@ -157,7 +157,7 @@ def load_jigsaw(path="../data", val_size=0.01, test_size=0.2, seed=42, model_nam
                                                         tokenizer_kwargs or {})
 
     return (train_dataset, val_dataset, test_dataset), (df_train, df_val,
-                                                        df_test)  # return both tokenized and original dfs
+                                                        df_test)
 
 
 def load_sst2(path=None, val_size=0.01, seed=42, model_name_or_path="bert-base-uncased",
@@ -240,7 +240,7 @@ def load_tweeteval(path=None, val_size=0.01, seed=42, model_name_or_path="bert-b
 
     raw = load_dataset("tweet_eval", "sentiment")
 
-    # Merge canonical train + validation to maximize the unlabeled pool
+
     df_all_train = pd.concat([
         pd.DataFrame({"text": raw["train"]["text"], "label": raw["train"]["label"]}),
         pd.DataFrame({"text": raw["validation"]["text"], "label": raw["validation"]["label"]})
@@ -317,7 +317,7 @@ def load_yahoo_answers(path=None, val_size=0.01, seed=42, subsample=50000,
         "label": raw["test"]["topic"]
     })
 
-    # Stratified subsample of training set
+
     actual_subsample = min(subsample, len(df_train_full))
     df_train_sub, _ = train_test_split(
         df_train_full, train_size=actual_subsample,
@@ -329,7 +329,7 @@ def load_yahoo_answers(path=None, val_size=0.01, seed=42, subsample=50000,
         stratify=df_train_sub["label"], random_state=seed
     )
 
-    # Cap test set at 10K for tractable evaluation
+
     test_cap = min(10000, len(df_test_full))
     df_test, _ = train_test_split(
         df_test_full, train_size=test_cap,

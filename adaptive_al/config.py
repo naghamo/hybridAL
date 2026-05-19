@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Set
 
-# from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     pass
+
+
+
 
 
 @dataclass
@@ -24,33 +24,33 @@ class ExperimentConfig:
     learning pipeline, including reproducibility seeds, pool management,
     training parameters, model configuration, and logging options.
     """
-    # --- Reproducibility
+
     seed: int = 42
-    total_rounds: int = -1 # Total rounds to run active learning (model training + sampling new data),
-                           # -1 means until we run out of data
+    total_rounds: int = -1
 
-    # --- Pool config
-    initial_pool_size: int = 200 # Initial size of the pool for training
-    acquisition_batch_size: int = 32 # New labels per round
 
-    # Plateau checking:
+
+    initial_pool_size: int = 200
+    acquisition_batch_size: int = 32
+
+
     min_rounds_before_plateau: int = -1
     plateau_patience: int = -1
     plateau_f1_threshold: float = 0.5
 
-    max_seconds: int = None # i.e. no timeout
+    max_seconds: int = None
 
     pool_proportion_threshold: float = -1
 
     sampler_class: str = field(default=None)
     sampler_kwargs: Dict[str, Any] = field(default_factory=dict)
 
-    # --- Training config
-    # Strategy and Sampler configuration
+
+
     strategy_class: str = field(default=None)
     strategy_kwargs: Dict[str, Any] = field(default_factory=dict)
 
-    # Model configuration (via transformers)
+
     model_name_or_path: str = field(default='None')
     num_labels: int = field(default=None)
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=lambda: {
@@ -61,7 +61,7 @@ class ExperimentConfig:
         "return_tensors": "pt"
     })
 
-    # Optimizer / Criterion / Scheduler configuration
+
     optimizer_class: str = field(default=None)
     optimizer_kwargs: Dict[str, Any] = field(default_factory=dict)
 
@@ -75,26 +75,26 @@ class ExperimentConfig:
     epochs: int = 10
     batch_size: int = 16
 
-    # Early stopping (applied uniformly to all strategies; controls within-round epoch loop)
+
     early_stopping_patience: int = 2
     early_stopping_min_delta: float = 1e-4
 
-    # HybridAL switching signal. Selects which of the per-round signals drives
-    # the Retrain → FineTune switch in DeltaF1Strategy.
-    # Options: "delta_f1", "delta_accuracy", "delta_loss",
-    #          "gradient_norm", "l2_weight_distance", "cka",
-    #          "spectral_alpha", "nc1_ratio".
+
+
+
+
+
     switching_signal: str = "delta_f1"
 
-    # When True, every round logs ALL signal values (not just the active one)
-    # under round_stats["signals"]. Used for the signal-ablation calibration and
-    # for full-trajectory logging during the ablation runs.
+
+
+
     log_all_signals: bool = False
 
-    # Dataset for the model
+
     data: str = field(default=None)
 
-    # Logging
+
     save_dir: Path = Path("./results")
     experiment_name: str = "dummy"
 
@@ -123,7 +123,7 @@ class ExperimentConfig:
         if self.criterion_class is None:
             raise ValueError("criterion_class is required in ExperimentConfig")
 
-        # Ensure kwargs are always dicts
+
         self.strategy_kwargs = self.strategy_kwargs or {}
         self.sampler_kwargs = self.sampler_kwargs or {}
         self.optimizer_kwargs = self.optimizer_kwargs or {}

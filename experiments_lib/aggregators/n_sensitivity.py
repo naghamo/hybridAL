@@ -26,7 +26,7 @@ def main(args: argparse.Namespace) -> None:
         return
     write_default_csvs(SAVE_ROOT, rows_summary, rows_per_round)
 
-    # Pull N out of run-name suffix.
+
     by_n_ds = defaultdict(list)
     for r in rows_summary:
         run = r["run"]

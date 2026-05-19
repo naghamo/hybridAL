@@ -32,7 +32,7 @@ from .pool import DataPool
 import adaptive_al.strategies as strategies
 import adaptive_al.samplers as samplers
 
-# Used in data loading eval string
+
 from .utils.data_loader import load_agnews, load_imdb, load_jigsaw, load_sst2, load_tweeteval, load_yahoo_answers
 
 from .evaluation import (
@@ -112,7 +112,7 @@ class ActiveLearning:
         Creates a DataPool object with a random subset of training data
         based on cfg.initial_pool_size.
         """
-        # Initialize pool with stratified random samples (equal class representation)
+
         from collections import defaultdict
         class_to_indices = defaultdict(list)
         for i, label in enumerate(self.train_dataset.labels):
@@ -122,7 +122,7 @@ class ActiveLearning:
         initial_indices = []
         for cls_indices in class_to_indices.values():
             initial_indices.extend(random.sample(cls_indices, min(per_class, len(cls_indices))))
-        # Top up to exact initial_pool_size if rounding left us short
+
         remaining = self.cfg.initial_pool_size - len(initial_indices)
         if remaining > 0:
             leftover = [i for i in range(len(self.train_dataset)) if i not in set(initial_indices)]
@@ -143,38 +143,38 @@ class ActiveLearning:
         """
         cfg = self.cfg
 
-        # --- Optimizer
-        self.optimizer_cls = resolve_class(cfg.optimizer_class, optim)  # from torch.optim
+
+        self.optimizer_cls = resolve_class(cfg.optimizer_class, optim)
         self.optimizer_kwargs = cfg.optimizer_kwargs
 
-        # --- Criterion
-        self.criterion_cls = resolve_class(cfg.criterion_class, nn)  # from torch.nn
+
+        self.criterion_cls = resolve_class(cfg.criterion_class, nn)
         self.criterion_kwargs = cfg.criterion_kwargs
 
-        # --- Scheduler
+
         self.scheduler_cls = None
         self.scheduler_kwargs = {}
         if cfg.scheduler_class:
-            self.scheduler_cls = resolve_class(cfg.scheduler_class, optim.lr_scheduler)  # from torch.optim.lr_scheduler
+            self.scheduler_cls = resolve_class(cfg.scheduler_class, optim.lr_scheduler)
             self.scheduler_kwargs = cfg.scheduler_kwargs
 
-        # --- Strategy
-        self.strategy_cls = resolve_class(cfg.strategy_class, strategies)  # from our adaptive_al.strategies
+
+        self.strategy_cls = resolve_class(cfg.strategy_class, strategies)
         self.strategy_kwargs = dict(cfg.strategy_kwargs)
-        # Inject top-level cfg.switching_signal as the DeltaF1Strategy `signal`
-        # kwarg if the caller has not already specified one in strategy_kwargs.
+
+
         if (cfg.strategy_class == "DeltaF1Strategy"
                 and "signal" not in self.strategy_kwargs):
             self.strategy_kwargs["signal"] = cfg.switching_signal
 
-        # --- Sampler
-        self.sampler_cls = resolve_class(cfg.sampler_class, samplers)  # from our adaptive_al.samplers
+
+        self.sampler_cls = resolve_class(cfg.sampler_class, samplers)
         self.sampler_kwargs = cfg.sampler_kwargs
 
-        # --- Instantiate strategy
+
 
         self.strategy = self.strategy_cls(
-            model=self.model,  # Passing model instance
+            model=self.model,
             optimizer_cls=self.optimizer_cls,
             optimizer_kwargs=self.optimizer_kwargs,
             criterion_cls=self.criterion_cls,
@@ -187,10 +187,10 @@ class ActiveLearning:
             val_dataset=self.val_dataset,
             early_stopping_patience=cfg.early_stopping_patience,
             early_stopping_min_delta=cfg.early_stopping_min_delta,
-            **self.strategy_kwargs  # optional extra kwargs
+            **self.strategy_kwargs
         )
 
-        # --- Instantiate sampler
+
         self.sampler = self.sampler_cls(model=self.model, batch_size=cfg.batch_size, device=cfg.device,
                                         **self.sampler_kwargs)
 
@@ -205,18 +205,18 @@ class ActiveLearning:
         self.final_test_stats: Dict = {}
 
         self.current_round = 0
-        # For computing absolute deltas of f1/accuracy/loss across rounds
-        # whenever log_all_signals=True. Filled in train_one_round.
+
+
         self._prev_signal_metrics: Optional[Dict[str, float]] = None
-        # Previous-round raw values for the new delta-style signals.
+
         self._prev_alpha: Optional[float] = None
         self._prev_nc: Optional[float] = None
-        # Round-1 references used to compute "vs round 1" stability metrics
-        # (||theta_t - theta_1||, CKA(reps_t, reps_1), |alpha_t - alpha_1|,
-        # |NC_t - NC_1|). All cached on the first call to _compute_round_signals
-        # since that runs after round 1's training.
-        self._theta_round1: Optional[torch.Tensor] = None  # CPU float
-        self._reps_round1: Optional[torch.Tensor] = None   # CPU float (n, dim)
+
+
+
+
+        self._theta_round1: Optional[torch.Tensor] = None
+        self._reps_round1: Optional[torch.Tensor] = None
         self._alpha_round1: Optional[float] = None
         self._nc_round1: Optional[float] = None
 
@@ -232,7 +232,7 @@ class ActiveLearning:
         """
         dataset_name = self.cfg.data
 
-        # Make sure the index is reset, or we need to change the pool initialization
+
         (train_dataset, val_dataset, test_dataset), (df_train, df_val,
                                                         df_test) = eval(
             f"load_{dataset_name}(path='data', seed={self.cfg.seed}, model_name_or_path='{self.cfg.model_name_or_path}', tokenizer_kwargs={self.cfg.tokenizer_kwargs})")
@@ -281,10 +281,10 @@ class ActiveLearning:
             f"{'─'*60}"
         )
 
-        # Train model (timing handled in base class)
+
         training_stats = self.strategy.train(self.pool, new_indices)
 
-        # Evaluate model
+
         val_stats = evaluate_model(
             self.model,
             self.strategy.criterion,
@@ -294,7 +294,7 @@ class ActiveLearning:
             include_advanced_metrics=True,
         )
 
-        # Keep in memory last performance
+
         self._update_last_stats(val_stats)
 
         delta_f1 = val_stats['f1_score'] - prev_f1
@@ -310,10 +310,10 @@ class ActiveLearning:
         if self.cfg.log_all_signals:
             round_stats["signals"] = self._compute_round_signals(val_stats)
 
-        # HybridAL switching decision happens here, after the per-round signals
-        # have been computed, so the strategy can reuse them instead of doing
-        # an extra forward pass that would advance the global CUDA RNG and
-        # desynchronize the next round's dropout from a Retrain-only run.
+
+
+
+
         self.strategy.update_switching_state(
             val_dataset=self.val_dataset,
             signals=round_stats.get("signals"),
@@ -392,7 +392,7 @@ class ActiveLearning:
 
         grad_norm = self._compute_gradient_norm(self.val_dataset)
 
-        # User-defined spectral-alpha (svdvals + log-log slope, averaged over Linear layers).
+
         try:
             alpha_t = calculate_user_spectral_alpha(self.model)
         except Exception:
@@ -403,7 +403,7 @@ class ActiveLearning:
         if alpha_t == alpha_t:
             self._prev_alpha = alpha_t
 
-        # Within-class variance of [CLS] reps over the current labeled pool.
+
         try:
             labeled_subset = self.pool.get_labeled_subset()
             nc_t = calculate_within_class_variance(
@@ -417,14 +417,14 @@ class ActiveLearning:
         if nc_t == nc_t:
             self._prev_nc = nc_t
 
-        # Per-round stability metrics that do NOT depend on round t-1:
-        #   weight_norm           = ||theta_t||_2
-        #   l2_vs_round1          = ||theta_t - theta_1||_2
-        #   cka_vs_round1         = linear CKA(reps_t, reps_1)
-        #   alpha_vs_round1       = |alpha_t - alpha_1|
-        #   nc_vs_round1          = |NC_t - NC_1|
-        # Round 1 is its own reference, so the round-1 values are 0 / 1 / 0 / 0
-        # by convention.
+
+
+
+
+
+
+
+
         try:
             flat_theta = _flatten_trainable_parameters(self.model).cpu().float()
             weight_norm = float(torch.norm(flat_theta, p=2).item())
@@ -432,10 +432,10 @@ class ActiveLearning:
             flat_theta = None
             weight_norm = float("nan")
 
-        # NOTE: use the FIXED-size validation set as the CKA reference, NOT
-        # pool.get_labeled_subset() — the labeled pool grows each round, so
-        # reps_t (e.g. 232x768) wouldn't match reps_round1 (e.g. 200x768) and
-        # calculate_linear_cka would return NaN for every round t>1.
+
+
+
+
         try:
             reps_t, _labels_t = _collect_representations(
                 self.model, self.val_dataset, self.cfg.batch_size, self.cfg.device,
@@ -493,10 +493,10 @@ class ActiveLearning:
             "cka": float(val_stats.get("cka", float("nan"))),
             "delta_spectral_alpha": float(delta_alpha),
             "delta_nc": float(delta_nc),
-            # Also log raw alpha/NC for trajectory plots.
+
             "_raw_spectral_alpha": float(alpha_t),
             "_raw_nc": float(nc_t),
-            # Per-round stability metrics (no comparison to t-1).
+
             "weight_norm": float(weight_norm),
             "l2_vs_round1": float(l2_vs_round1),
             "cka_vs_round1": float(cka_vs_round1),
@@ -525,7 +525,7 @@ class ActiveLearning:
             targets = targets.to(self.cfg.device)
             outputs = self.model(**inputs)
             loss = self.strategy.criterion(outputs.logits, targets)
-            loss.backward()  # accumulates into .grad; frees this batch's graph
+            loss.backward()
 
         norm = sum(
             p.grad.norm().item() ** 2
@@ -742,7 +742,7 @@ class ActiveLearning:
             strategy_metadata['switch_round'] = self.strategy.switch_round
 
         return {
-            "cfg": self.cfg.__dict__,  # Already fully serializable
+            "cfg": self.cfg.__dict__,
             "total_rounds": len(self.round_stats),
             "round_val_stats": self.round_stats,
             "strategy_metadata": strategy_metadata,
@@ -760,7 +760,7 @@ class ActiveLearning:
         """
         limit = getattr(self.cfg, "max_seconds", None)
         if limit is None or limit < 0:
-            return False  # unlimited
+            return False
         timed_out = (time.perf_counter() - self.start_time) >= limit
 
         if timed_out:
@@ -771,7 +771,7 @@ class ActiveLearning:
         """Save experiment results to a JSON file."""
         summary = self.get_experiment_summary()
 
-        # Determine file path
+
         save_dir = self.cfg.save_dir / self.cfg.experiment_name
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -781,9 +781,9 @@ class ActiveLearning:
                 name += "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
             filepath = save_dir / f"{name}.json"
 
-        # Save to JSON
+
         with open(filepath, 'w') as f:
-            json.dump(summary, f, indent=2, default=str)  # default=str handles any residual non-serializable objects
+            json.dump(summary, f, indent=2, default=str)
 
         logging.info(f"Experiment saved to {filepath}")
 

@@ -43,8 +43,8 @@ from ._base import build_summary_and_per_round, write_default_csvs
 
 NAME = "hyperparameter_tuning"
 SAVE_ROOT = Path(f"experiments/{NAME}")
-TIE_BREAK_F1_TOL = 0.005   # candidates within 0.5 % F1 of top are tied
-SCORE_NLL_WEIGHT = 0.5     # lambda in score = T/T_min + lambda * NLL/NLL_min
+TIE_BREAK_F1_TOL = 0.005
+SCORE_NLL_WEIGHT = 0.5
 
 
 def _filter(name: str) -> bool:
@@ -126,7 +126,7 @@ def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
         return (time_means[key] / T_min
                 + SCORE_NLL_WEIGHT * nll_means[key] / NLL_min)
 
-    # Sort: smallest score first; on tie, smaller k (deterministic).
+
     common.sort(key=lambda k: (_score(k), k[1]))
     eps, k = common[0]
 
@@ -168,14 +168,14 @@ def main(args: argparse.Namespace) -> None:
         return
     write_default_csvs(SAVE_ROOT, rows_summary, rows_per_round)
 
-    # Group rows by signal first. Use VALIDATION F1 for selection — test F1
-    # is held out for the final paper table (Exp 3) and selecting on it
-    # would be data leakage.
-    by_signal_eps_k_f1 = defaultdict(lambda: defaultdict(list))   # final-round val F1
-    by_signal_eps_k_nll = defaultdict(lambda: defaultdict(list))  # final-round val NLL
+
+
+
+    by_signal_eps_k_f1 = defaultdict(lambda: defaultdict(list))
+    by_signal_eps_k_nll = defaultdict(lambda: defaultdict(list))
     by_signal_eps_k_sw = defaultdict(lambda: defaultdict(list))
     by_signal_eps_k_time = defaultdict(lambda: defaultdict(list))
-    by_signal_eps_k_test = defaultdict(lambda: defaultdict(list)) # diagnostic only
+    by_signal_eps_k_test = defaultdict(lambda: defaultdict(list))
     for r in rows_summary:
         sig = r.get("signal")
         val_f1 = r.get("final_val_f1")
@@ -201,7 +201,7 @@ def main(args: argparse.Namespace) -> None:
         print(f"[{NAME}] no rows yet")
         return
 
-    # Per-signal selection + per-signal heatmap + combined report.
+
     signals_sorted = sorted(by_signal_eps_k_f1)
     report_lines = ["Exp 2 — Hyperparameter tuning of (ε, k)"]
 
@@ -210,11 +210,11 @@ def main(args: argparse.Namespace) -> None:
         sw_pivot = by_signal_eps_k_sw[signal]
         test_pivot = by_signal_eps_k_test[signal]
 
-        # Heatmap (val F1 — selection metric)
+
         out_plot = SAVE_ROOT / "plots" / f"heatmap_{signal}.png"
         _make_heatmap(val_pivot, signal, out_plot)
 
-        # Choose
+
         time_pivot = by_signal_eps_k_time[signal]
         nll_pivot = by_signal_eps_k_nll[signal]
         chosen = _pick_best_eps_k(val_pivot, sw_pivot, test_pivot,
@@ -223,7 +223,7 @@ def main(args: argparse.Namespace) -> None:
         out_json = SAVE_ROOT / f"chosen_eps_k_{signal}.json"
         out_json.write_text(json.dumps(chosen, indent=2))
 
-        # Report rows
+
         eps_vals = sorted({k[0] for k in val_pivot})
         k_vals = sorted({k[1] for k in val_pivot})
         sw_str = (f"{chosen['mean_switch_round']:.1f}"

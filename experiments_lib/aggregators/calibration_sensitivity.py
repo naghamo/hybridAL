@@ -13,7 +13,7 @@ def _filter(name): return name.startswith("Calib_")
 def _source(run): return run.split("_")[1]
 
 
-# Datasets used as calibration sources (so we can flag "seen vs unseen").
+
 SEEN_DATASETS = {"imdb", "agnews"}
 
 
@@ -40,7 +40,7 @@ def main(args):
 
     lines.append("\n(✓ = dataset used as calibration source; ? = unseen by calibration)")
 
-    # Robustness on UNSEEN datasets only.
+
     unseen = [d for d in datasets if d not in SEEN_DATASETS]
     lines.append(f"\nUnseen-dataset means per source:")
     for s in sources:

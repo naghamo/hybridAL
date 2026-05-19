@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")  # headless / no display required
+matplotlib.use("Agg")
 
 
 def _load_best_hyper(hyper_file: str) -> dict:
@@ -60,7 +60,7 @@ def main():
                         help="Only generate plots, skip LaTeX table.")
     args = parser.parse_args()
 
-    # ── resolve best hyperparams ───────────────────────────────────────────── #
+
     hyper_from_file = _load_best_hyper(args.hyper_file)
 
     hybrid_hyper = {
@@ -69,10 +69,10 @@ def main():
     }
     if args.hybrid_vf or hyper_from_file.get("validation_fraction"):
         hybrid_hyper["validation_fraction"] = args.hybrid_vf or hyper_from_file.get("validation_fraction")
-    # Remove None values so filter_experiments_df doesn't filter on missing keys
+
     hybrid_hyper = {k: v for k, v in hybrid_hyper.items() if v is not None}
 
-    # ── load data ─────────────────────────────────────────────────────────── #
+
     try:
         from figure_plotter import (
             get_experiments_df,
@@ -95,7 +95,7 @@ def main():
         print(f"[generate_results] ERROR: could not import figure_plotter: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Load and concatenate experiments from all requested directories
+
     dfs = []
     for d in args.dirs:
         if not Path(d).exists():
@@ -117,11 +117,11 @@ def main():
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # ── plots ─────────────────────────────────────────────────────────────── #
+
     if not args.skip_plots:
         print("[generate_results] Generating plots...")
 
-        # F1 vs time (averaged across seeds)
+
         try:
             plot_f1_vs_time_avg(df, hybrid_hyper,
                                 save_dir_path=str(out / "f1_vs_time"))
@@ -129,7 +129,7 @@ def main():
         except Exception as e:
             print(f"  [plot] f1_vs_time_avg: SKIPPED ({e})")
 
-        # Bar chart of final test F1
+
         try:
             plot_test_f1_bar_chart(df, hybrid_hyper,
                                    save_path=str(out / "test_f1_bar.png"))
@@ -137,7 +137,7 @@ def main():
         except Exception as e:
             print(f"  [plot] test_f1_bar_chart: SKIPPED ({e})")
 
-        # F1 with switch point overlay
+
         try:
             plot_f1_vs_round_switch(df, hybrid_hyper,
                                     save_dir_path=str(out / "f1_switch"))
@@ -145,7 +145,7 @@ def main():
         except Exception as e:
             print(f"  [plot] f1_vs_round_switch: SKIPPED ({e})")
 
-        # Hyperparameter variations (only if DeltaF1 experiments present)
+
         try:
             plot_hybrid_hyper_variations(df, hybrid_hyper,
                                          save_dir_path=str(out / "hyper_variations"))
@@ -153,7 +153,7 @@ def main():
         except Exception as e:
             print(f"  [plot] hybrid_hyper_variations: SKIPPED ({e})")
 
-        # Confusion heatmaps for HybridAL (one per dataset)
+
         if hybrid_hyper:
             try:
                 plot_confusion_heatmaps_hybrid(df, hybrid_hyper,
@@ -162,14 +162,14 @@ def main():
             except Exception as e:
                 print(f"  [plot] confusion_heatmaps_hybrid: SKIPPED ({e})")
 
-        # Switch heatmap (epsilon x k -> avg switch round)
+
         try:
             plot_switch_heatmap(df, save_dir_path=str(out / "switch_heatmap"))
             print("  [plot] switch_heatmap: done")
         except Exception as e:
             print(f"  [plot] switch_heatmap: SKIPPED ({e})")
 
-        # ── Comparison plots ───────────────────────────────────────────────── #
+
         try:
             plot_backbone_comparison(df, hybrid_hyper, save_dir_path=str(out))
             print("  [plot] backbone_comparison: done")
@@ -206,7 +206,7 @@ def main():
         except Exception as e:
             print(f"  [plot] training_time_comparison: SKIPPED ({e})")
 
-        # Significance table (printed, not a plot)
+
         if hybrid_hyper:
             try:
                 sig_df = get_significance_table(df, hybrid_hyper)
@@ -218,9 +218,9 @@ def main():
             except Exception as e:
                 print(f"  [sig] SKIPPED ({e})")
 
-    # ── LaTeX table ───────────────────────────────────────────────────────── #
+
     if not args.skip_table:
-        modes = ["main", "backbones", "samplers", "fixed_switch", "signal"] \
+        modes = ["main", "backbones", "samplers", "fixed_switch", "signal"]\
                 if args.table_mode == "all" else [args.table_mode]
         for mode in modes:
             tex_path = out / f"table_{mode}.tex"

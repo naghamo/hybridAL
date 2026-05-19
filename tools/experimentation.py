@@ -51,9 +51,9 @@ from adaptive_al.active_learning import ActiveLearning, ExperimentConfig
 
 HOURS = 3600
 
-# --------------------------------------------------------------------------- #
-# Dataset registry                                                              #
-# --------------------------------------------------------------------------- #
+
+
+
 DATASET_NUM_LABELS = {
     "agnews":        4,
     "imdb":          2,
@@ -91,11 +91,11 @@ HYBRID_EPSILON_SEARCH_SPACES = {
 }
 HYBRID_K_SEARCH_SPACE = [3, 5, 7, 10]
 
-# --------------------------------------------------------------------------- #
-# Experiment modes — each entry overrides specific arg defaults                #
-# --------------------------------------------------------------------------- #
+
+
+
 MODES = {
-    # ── Sanity / CI smoke test ───────────────────────────────────────────── #
+
     "quick": dict(
         datasets=["imdb"],
         strategies=["RetrainStrategy", "FineTuneStrategy", "DeltaF1Strategy"],
@@ -108,7 +108,7 @@ MODES = {
         save_dir="./experiments/quick",
     ),
 
-    # ── Subset-size sensitivity: finds stable subset size for entropy sampling #
+
     "subset_sensitivity": dict(
         datasets=["imdb", "sst2"],
         strategies=["RetrainStrategy", "FineTuneStrategy"],
@@ -120,7 +120,7 @@ MODES = {
         save_dir="./experiments/subset_sensitivity",
     ),
 
-    # ── All non-Optuna strategies: run these first ───────────────────────── #
+
     "baselines": dict(
         datasets=ALL_DATASETS,
         strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy"],
@@ -130,7 +130,7 @@ MODES = {
         save_dir="./experiments/baselines",
     ),
 
-    # ── Primary HybridAL: Optuna on main setup ───────────────────────────── #
+
     "hybrid": dict(
         datasets=ALL_DATASETS,
         strategies=["DeltaF1Strategy"],
@@ -141,7 +141,7 @@ MODES = {
         save_dir="./experiments/hybrid",
     ),
 
-    # ── Backbone ablation: BERT + RoBERTa ────────────────────────────────── #
+
     "backbones": dict(
         datasets=ALL_DATASETS,
         strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"],
@@ -152,7 +152,7 @@ MODES = {
         save_dir="./experiments/backbones",
     ),
 
-    # ── Sampler ablation: Random + BADGE ─────────────────────────────────── #
+
     "samplers": dict(
         datasets=ALL_DATASETS,
         strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"],
@@ -163,7 +163,7 @@ MODES = {
         save_dir="./experiments/samplers",
     ),
 
-    # ── Fixed-switch baselines at k = 3, 5, 7, 10 ───────────────────────── #
+
     "fixed_switch": dict(
         datasets=ALL_DATASETS,
         strategies=["FixedSwitchStrategy"],
@@ -174,7 +174,7 @@ MODES = {
         save_dir="./experiments/fixed_switch",
     ),
 
-    # ── Signal ablation: auto-tunes all non-default hybrid signals ───────── #
+
     "signal_ablation": dict(
         datasets=ALL_DATASETS,
         strategies=["DeltaF1Strategy"],
@@ -185,7 +185,7 @@ MODES = {
         save_dir="./experiments/signal_ablation",
     ),
 
-    # ── Full paper run: all of the above combined ─────────────────────────── #
+
     "full": dict(
         datasets=ALL_DATASETS,
         strategies=["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy",
@@ -200,9 +200,9 @@ MODES = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Helpers                                                                       #
-# --------------------------------------------------------------------------- #
+
+
+
 
 def model_slug(model_name: str) -> str:
     """Convert a model name like 'roberta-base' to a filesystem-safe short key."""
@@ -242,9 +242,9 @@ def _run_single(config_parameters):
     return final_metrics
 
 
-# --------------------------------------------------------------------------- #
-# Optuna objective                                                              #
-# --------------------------------------------------------------------------- #
+
+
+
 
 def objective(trial, strategy, data_sets, seeds, common_config_parameters,
               start_time=0):
@@ -294,9 +294,9 @@ def objective(trial, strategy, data_sets, seeds, common_config_parameters,
     return sum(f1_scores) / len(f1_scores) if f1_scores else None
 
 
-# --------------------------------------------------------------------------- #
-# Argument parsing                                                              #
-# --------------------------------------------------------------------------- #
+
+
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -305,7 +305,7 @@ def parse_args():
         epilog=__doc__,
     )
 
-    # ── Mode ─────────────────────────────────────────────────────────────── #
+
     parser.add_argument(
         "--mode",
         choices=list(MODES.keys()),
@@ -321,24 +321,24 @@ def parse_args():
         help="Re-run all experiments, including ones that already have saved results.",
     )
 
-    # ── Experiment selection ──────────────────────────────────────────────── #
+
     parser.add_argument("--datasets",   nargs="+", default=None)
     parser.add_argument("--strategies", nargs="+", default=None)
     parser.add_argument("--models",     nargs="+", default=None)
     parser.add_argument("--samplers",   nargs="+", default=None)
     parser.add_argument("--seeds",      nargs="+", type=int, default=None)
 
-    # ── Output ────────────────────────────────────────────────────────────── #
+
     parser.add_argument("--save-dir", type=str, default=None)
 
-    # ── Training ──────────────────────────────────────────────────────────── #
+
     parser.add_argument("--epochs",        type=int,   default=10)
     parser.add_argument("--batch-size",    type=int,   default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--weight-decay",  type=float, default=1e-3)
     parser.add_argument("--max-length",    type=int,   default=128)
 
-    # ── Active learning ────────────────────────────────────────────────────── #
+
     parser.add_argument("--initial-pool-size",      type=int,   default=200)
     parser.add_argument("--acquisition-batch-size", type=int,   default=32)
     parser.add_argument("--total-rounds",           type=int,   default=None)
@@ -348,25 +348,25 @@ def parse_args():
                         help="Number of Optuna trials. 50 covers all 16 combos ~3x (~20h). Overrides --optuna-hours if set.")
     parser.add_argument("--max-seconds",            type=int,   default=None)
 
-    # ── Plateau ───────────────────────────────────────────────────────────── #
+
     parser.add_argument("--min-rounds-before-plateau", type=int,   default=10)
-    parser.add_argument("--plateau-patience",          type=int,   default=-1)   # -1 = disabled; all experiments run full total_rounds
+    parser.add_argument("--plateau-patience",          type=int,   default=-1)
     parser.add_argument("--plateau-f1-threshold",      type=float, default=0.0005)
 
-    # ── Sampling ──────────────────────────────────────────────────────────── #
+
     parser.add_argument("--random-subset-size", type=int, default=5000)
 
-    # ── Scheduler ─────────────────────────────────────────────────────────── #
+
     parser.add_argument("--scheduler-step-size", type=int,   default=10)
     parser.add_argument("--scheduler-gamma",     type=float, default=0.1)
 
-    # ── Optuna ────────────────────────────────────────────────────────────── #
+
     parser.add_argument("--optuna-hours", type=float, default=None)
 
-    # ── FixedSwitchStrategy ────────────────────────────────────────────────── #
+
     parser.add_argument("--fixed-switch-rounds", nargs="+", type=int, default=None)
 
-    # ── Signal ablation ────────────────────────────────────────────────────── #
+
     parser.add_argument(
         "--ablation-signals", nargs="+", default=None,
         help="Signals for DeltaF1Strategy. Each selected signal is tuned with a signal-specific epsilon grid.",
@@ -380,7 +380,7 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Apply mode defaults for any arg that was not explicitly set
+
     if args.mode is not None:
         mode_defaults = MODES[args.mode]
         for key, value in mode_defaults.items():
@@ -388,7 +388,7 @@ def parse_args():
             if getattr(args, cli_key, None) is None:
                 setattr(args, cli_key, value)
 
-    # Global fallbacks when no mode was used and flag was not set
+
     if args.datasets          is None: args.datasets          = ORIGINAL_DATASETS
     if args.strategies        is None: args.strategies        = ["DeltaF1Strategy", "FineTuneStrategy",
                                                                    "NewOnlyStrategy", "RetrainStrategy"]
@@ -405,9 +405,9 @@ def parse_args():
     return args
 
 
-# --------------------------------------------------------------------------- #
-# Experiment plan builder (used for counting + dry-run + actual run)           #
-# --------------------------------------------------------------------------- #
+
+
+
 
 def build_experiment_list(args, save_dir: Path):
     """
@@ -497,9 +497,9 @@ def build_experiment_list(args, save_dir: Path):
     return experiments
 
 
-# --------------------------------------------------------------------------- #
-# Main                                                                          #
-# --------------------------------------------------------------------------- #
+
+
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -511,11 +511,11 @@ if __name__ == "__main__":
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Inject device into args so build_experiment_list can include it
-    # (device is not a CLI arg — set it here after torch check)
+
+
     save_dir = Path(args.save_dir)
 
-    # ── Print configuration ─────────────────────────────────────────────── #
+
     mode_label = f"  mode     : {args.mode}" if args.mode else "  mode     : (custom)"
     print("=" * 70)
     print("EXPERIMENT CONFIGURATION")
@@ -534,10 +534,10 @@ if __name__ == "__main__":
         print(f"  fixed_switch_rounds: {args.fixed_switch_rounds}")
     print("=" * 70)
 
-    # ── Build experiment list for counting / dry-run ─────────────────────── #
+
     experiment_list = build_experiment_list(args, save_dir)
 
-    # Separate Optuna placeholders from runnable experiments
+
     optuna_runs  = [e for e in experiment_list if e["strategy"] == "DeltaF1Strategy_Optuna"]
     direct_runs  = [e for e in experiment_list if e["strategy"] != "DeltaF1Strategy_Optuna"]
 
@@ -560,7 +560,7 @@ if __name__ == "__main__":
         print("\nDry run complete. Nothing was executed.")
         raise SystemExit(0)
 
-    # ── Inject device into every config ──────────────────────────────────── #
+
     for e in experiment_list:
         e["config"]["device"] = device
 
@@ -568,7 +568,7 @@ if __name__ == "__main__":
     total_to_run = len(pending) + len(optuna_runs)
     done_count   = 0
 
-    # ── Run direct experiments ─────────────────────────────────────────────── #
+
     for e in pending:
         done_count += 1
         logging.info(
@@ -580,7 +580,7 @@ if __name__ == "__main__":
         except Exception as exc:
             logging.error(f"FAILED: {e['name']} — {exc}", exc_info=True)
 
-    # ── Grid search (DeltaF1Strategy, signal-specific epsilon grids) ────── #
+
     for e in optuna_runs:
         done_count += 1
         common_cfg = e["config"].copy()
@@ -593,13 +593,13 @@ if __name__ == "__main__":
             f"signal={signal} model={mslug_val} sampler={sampler_n}"
         )
 
-        tune_seeds    = args.seeds[:3]          # 3 seeds for tuning
-        tune_datasets = ["imdb", "agnews"]      # 2 representative datasets
+        tune_seeds    = args.seeds[:3]
+        tune_datasets = ["imdb", "agnews"]
         tune_cfg      = {**common_cfg, "total_rounds": args.optuna_rounds}
         sampler_kwargs_base = common_cfg.get("sampler_kwargs", {})
 
         epsilons, ks = get_hybrid_search_space(signal)
-        grid_results = {}  # (epsilon, k) -> avg f1
+        grid_results = {}
 
         import glob as _glob
 
@@ -674,7 +674,7 @@ if __name__ == "__main__":
             )
         logging.info("Best hyperparams saved to %s", best_hparams_path)
 
-        # ── Final evaluation: best hyperparams on all 6 datasets × 5 seeds ── #
+
         logging.info("Running final evaluation with best hyperparams on all datasets and seeds...")
         best_strat_kwargs = {"epsilon": best_epsilon, "k": best_k, "signal": signal}
         for data_set, seed in itertools.product(args.datasets, args.seeds):

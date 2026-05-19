@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader, Subset
 
 try:
     import weightwatcher as ww
-except ImportError:  # pragma: no cover - depends on runtime environment
+except ImportError:
     ww = None
 
 
@@ -140,7 +140,7 @@ def calculate_spectral_alpha(
                 alpha_values = details["alpha"].replace([np.inf, -np.inf], np.nan).dropna()
                 if not alpha_values.empty:
                     return float(alpha_values.tail(max_layers).mean())
-        except Exception as exc:  # pragma: no cover - defensive fallback
+        except Exception as exc:
             logging.warning("WeightWatcher spectral alpha failed, falling back to local approximation: %s", exc)
 
     candidate_matrices = []
@@ -421,7 +421,7 @@ def _evaluate_model_core(
     """
     start = time.perf_counter()
 
-    # Create subset if requested
+
     eval_dataset = dataset
     if subset_size is not None:
         if random_seed is not None:
@@ -447,7 +447,7 @@ def _evaluate_model_core(
             loss = criterion(logits, targets)
             total_loss += loss.item()
 
-            # Expecting multi-class (not binary)
+
             preds = torch.argmax(logits, dim=1)
 
             all_preds.append(preds.cpu())
@@ -610,7 +610,7 @@ def approximate_evaluate_variance(
         )
         results.append(result)
 
-    # Compute variance statistics
+
     metrics_arrays = {}
     for metric in results[0].keys():
         metrics_arrays[metric] = np.array([result[metric] for result in results])

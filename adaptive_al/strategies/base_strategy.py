@@ -47,7 +47,7 @@ class BaseStrategy(ABC):
                  early_stopping_min_delta: float = 1e-4):
         """Initialize the strategy either from scratch or by copying another strategy."""
         if strategy is not None:
-            # Initialize from another strategy
+
             self.model = strategy.model
             self.optimizer = strategy.optimizer
             self.criterion = strategy.criterion
@@ -66,16 +66,16 @@ class BaseStrategy(ABC):
             self.epochs = strategy.epochs
             self.batch_size = strategy.batch_size
 
-            # Inherit early-stopping configuration from parent strategy so that
-            # nested strategies (DeltaF1Strategy, FixedSwitchStrategy) use the
-            # exact same val set, patience, and min_delta as everyone else.
+
+
+
             self.val_dataset = strategy.val_dataset
             self.early_stopping_patience = strategy.early_stopping_patience
             self.early_stopping_min_delta = strategy.early_stopping_min_delta
         else:
-            # Store the passed-in class/kwargs
+
             self.model = model
-            self.initial_model_state_dict = copy.deepcopy(model.state_dict()) # Store initial weights for reset
+            self.initial_model_state_dict = copy.deepcopy(model.state_dict())
 
             self.optimizer_cls = optimizer_cls
             self.optimizer_kwargs = optimizer_kwargs
@@ -112,17 +112,17 @@ class BaseStrategy(ABC):
         """
         start_time = time.time()
 
-        # Call the strategy-specific training logic
+
         custom_stats = self._train_implementation(pool, new_indices)
 
         training_time = time.time() - start_time
 
-        # Add any base statistics...
+
         base_stats = {
             "training_time": training_time,
         }
 
-        # Merge with strategy-specific stats
+
         final_stats = {**base_stats, **custom_stats}
 
         return final_stats
@@ -173,8 +173,8 @@ class BaseStrategy(ABC):
         num_batches = 0
         actual_epochs = 0
 
-        # evaluate_model toggles model.eval(); remember the mode train_epochs was
-        # called in so we can restore it for the next epoch's gradient updates.
+
+
         initial_training_mode = self.model.training
 
         best_val_loss = float('inf')
@@ -214,7 +214,7 @@ class BaseStrategy(ABC):
             val_loss = self._compute_val_loss()
 
             if val_loss is None:
-                # No validation set available; behave like the pre-ES loop.
+
                 tqdm.write(
                     f"    Epoch {epoch + 1}/{self.epochs}  |  "
                     f"Avg Loss: {avg_epoch_loss:.4f}  |  Time: {epoch_time:.1f}s"

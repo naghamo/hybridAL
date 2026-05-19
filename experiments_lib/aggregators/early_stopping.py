@@ -11,9 +11,9 @@ SAVE_ROOT = Path(f"experiments/{NAME}")
 
 def _filter(name): return name.startswith("ES_")
 def _parse(run):
-    # ES_<config>_<method>_<dataset>_seed<seed>
+
     parts = run.split("_")
-    return parts[1] + "_" + parts[2], parts[3]   # config, method
+    return parts[1] + "_" + parts[2], parts[3]
 
 
 def main(args):

@@ -48,10 +48,10 @@ def _resolve_source_normalizers(args: argparse.Namespace) -> Dict[str, Dict[str,
     """Return {source: {signal: normalizer}} for the 3 calibration sources."""
     out: Dict[str, Dict[str, Optional[float]]] = {}
 
-    # Source A — current IMDb seed-42 calibration JSON.
+
     out["A"] = dict(load_normalizers())
 
-    # Source B — AG News seed-42 from in-flight Retrain run.
+
     candidates = sorted(Path(".").glob(args.source_b_glob))
     if not candidates:
         if args.dry_run:
@@ -61,7 +61,7 @@ def _resolve_source_normalizers(args: argparse.Namespace) -> Dict[str, Dict[str,
     else:
         out["B"] = compute_max_2_5_from_calibration_json(candidates[-1])
 
-    # Source C — per-signal average of A and B.
+
     avg: Dict[str, Optional[float]] = {}
     for s in SUPPORTED_SIGNALS:
         a = out["A"].get(s)

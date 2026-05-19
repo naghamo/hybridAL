@@ -36,9 +36,9 @@ def add_extra_args(p: argparse.ArgumentParser) -> None:
 
 
 def make_plan(args: argparse.Namespace) -> ExperimentPlan:
-    # Datasets reduced to the same 3 used by Exp 5 (pool size) and Exp 6
-    # (batch size) — IMDb / AG News / Yahoo Answers — covering the full
-    # label-cardinality range (binary / 4-class / 10-class).
+
+
+
     return make_plan_from_grid(
         name=NAME,
         save_root=SAVE_ROOT,
@@ -65,7 +65,7 @@ def make_cfg(args: argparse.Namespace, entry: dict):
     if method == "Retrain":
         strategy_class, strategy_kwargs = "RetrainStrategy", {}
     else:
-        # Phase-2: ε at the signal's raw scale, no calibration normalizer.
+
         strategy_class, strategy_kwargs = "DeltaF1Strategy", {
             "epsilon": args.epsilon, "k": args.k,
             "signal": args.signal, "signal_normalizer": None,

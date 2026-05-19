@@ -60,9 +60,9 @@ def read_one(result_path: Path) -> Dict[str, Any]:
     rounds = d.get("round_val_stats", []) or []
     train_time_total = sum((r.get("training_time") or 0) for r in rounds)
     actual_epochs = [r.get("actual_epochs") for r in rounds if r.get("actual_epochs") is not None]
-    # Last-round validation metrics — used by hyperparameter selection and any
-    # other tuning step. Test metrics are kept separately for final reporting
-    # only (so we don't leak test info into model-selection decisions).
+
+
+
     last_round = rounds[-1] if rounds else {}
     return {
         "run":             result_path.parent.name,
@@ -78,11 +78,11 @@ def read_one(result_path: Path) -> Dict[str, Any]:
         "signal_normalizer": skw.get("signal_normalizer"),
         "switch_round":    skw.get("switch_round")
                            or (d.get("strategy_metadata") or {}).get("switch_round"),
-        # Validation metrics from the last AL round (use these for tuning).
+
         "final_val_f1":       last_round.get("f1_score"),
         "final_val_accuracy": last_round.get("accuracy"),
         "final_val_loss":     last_round.get("loss"),
-        # Test metrics (held out — for final reporting only, never selection).
+
         "test_f1":         final.get("f1_score"),
         "test_accuracy":   final.get("accuracy"),
         "test_loss":       final.get("loss"),

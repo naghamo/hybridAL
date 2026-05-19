@@ -46,8 +46,8 @@ def make_cfg(args: argparse.Namespace, entry: dict):
     seed = entry["seed"]
 
     if cfg_label == "A_fixed5":
-        epochs, patience = 5, 999  # 999 = effectively disabled
-    else:  # B_es_max10
+        epochs, patience = 5, 999
+    else:
         epochs, patience = 10, 2
 
     if method == "Retrain":

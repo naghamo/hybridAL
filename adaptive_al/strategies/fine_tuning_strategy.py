@@ -47,13 +47,13 @@ class FineTuneStrategy(BaseStrategy):
             Dict: Training statistics including avg_loss, epochs, total_samples,
                   and new_samples.
         """
-        self.model.train()  # Set the model to training mode
+        self.model.train()
         self.model.to(self.device)
 
         if new_indices:
             pool.add_labeled_samples(new_indices)
 
-        # Get all labeled data from the pool
+
         labeled_subset = pool.get_labeled_subset()
         dataloader = DataLoader(labeled_subset, batch_size=self.batch_size, shuffle=True)
         total_loss, num_batches, actual_epochs = self.train_epochs(dataloader)

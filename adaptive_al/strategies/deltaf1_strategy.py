@@ -86,8 +86,8 @@ class DeltaF1Strategy(BaseStrategy):
 
         self.count = 0
         self.switched = False
-        # Tracks the previous round's raw metric for delta-style signals
-        # (delta_f1/delta_accuracy/delta_loss); None at round 1.
+
+
         self._prev_metric: Optional[float] = None
         self.switch_round: Optional[int] = None
         self._internal_round = 0
@@ -123,9 +123,9 @@ class DeltaF1Strategy(BaseStrategy):
                 val_dataset,
                 self.device,
                 include_advanced_metrics=True,
-                # active_learning.train_one_round is the canonical state-updater
-                # (it calls evaluate_model with update_state defaulting to True
-                # AFTER this call), so we read prev state without disturbing it.
+
+
+
                 update_advanced_metric_state=False,
             )
             return stats[self.signal]
@@ -163,9 +163,9 @@ class DeltaF1Strategy(BaseStrategy):
 
         loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
 
-        # Backward per-batch and accumulate into .grad. Summing losses across
-        # all val batches and backwarding once retains every batch's autograd
-        # graph in parallel, which OOMs on val sets of even a few thousand.
+
+
+
         for inputs, targets in loader:
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             targets = targets.to(self.device)
@@ -182,7 +182,7 @@ class DeltaF1Strategy(BaseStrategy):
         self.model.eval()
         return norm
 
-    # Signals whose switching value is |raw_t - raw_{t-1}| (absolute change).
+
     _DELTA_STYLE_SIGNALS = (
         "delta_f1", "delta_accuracy", "delta_loss",
         "delta_spectral_alpha", "delta_nc",
@@ -204,7 +204,7 @@ class DeltaF1Strategy(BaseStrategy):
         raw = self._calc_signal(val_dataset, pool=pool)
 
         if self.signal in self._DELTA_STYLE_SIGNALS:
-            if raw is None or not (raw == raw):  # nan / None
+            if raw is None or not (raw == raw):
                 return float("inf")
             if self._prev_metric is None:
                 self._prev_metric = raw
@@ -218,8 +218,8 @@ class DeltaF1Strategy(BaseStrategy):
                 return float("inf")
             return 1.0 - raw
 
-        # gradient_norm, l2_weight_distance, spectral_alpha, nc1_ratio:
-        # raw is already in "small = stabilized" form.
+
+
         if not (raw == raw):
             return float("inf")
         return raw
@@ -248,9 +248,9 @@ class DeltaF1Strategy(BaseStrategy):
             return self.fine_tune._train_implementation(pool, new_indices)
         return self.retrain._train_implementation(pool, new_indices)
 
-    # Maps each signal name to the field in the per-round signals dict produced
-    # by AdaptiveActiveLearner._compute_round_signals; the value found there is
-    # already in "small = stabilized" form except for cka (raw CKA in [-1, 1]).
+
+
+
     _SIGNAL_FROM_DICT = {
         "delta_f1": "delta_f1",
         "delta_accuracy": "delta_accuracy",

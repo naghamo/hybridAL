@@ -75,8 +75,8 @@ def _derive_or_accept_epsilon_grid(args: argparse.Namespace) -> list:
 
 def make_plan(args: argparse.Namespace) -> ExperimentPlan:
     if args.dry_run and (args.epsilon_grid is None and not args.confirm_grid):
-        # In a dry-run without an explicit grid, fabricate a placeholder so
-        # the plan is sized correctly for inspection.
+
+
         eps_grid = [0.05, 0.1, 0.2, 0.5]
         print("[hp-tuning] DRY RUN with placeholder ε grid:", eps_grid)
     else:
@@ -99,8 +99,8 @@ def make_cfg(args: argparse.Namespace, entry: dict):
     k = entry["k"]
     dataset = entry["dataset"]
     seed = entry["seed"]
-    # Phase-2 dropped the calibration normalizer — ε is at the signal's raw
-    # scale per experiment-spec, so signal_normalizer must be None here.
+
+
     name = f"HP_{args.signal}_eps{eps}_k{k}_{dataset}_seed{seed}"
     return build_cfg(
         experiment_name=name,

@@ -41,11 +41,11 @@ class DataPool:
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
 
-        # Convert to sets for efficient operations
+
         self.labeled_indices: Set[int] = set(initial_labeled_indices)
         self.unlabeled_indices: Set[int] = set(range(len(train_dataset))) - self.labeled_indices
 
-        # History tracking
+
         self.history: List[Dict] = []
 
     def get_subset(self, indices: List[int]):
@@ -72,12 +72,12 @@ class DataPool:
         """
         new_indices_set = set(new_indices)
 
-        # Validate indices are currently unlabeled
+
         invalid_indices = new_indices_set - self.unlabeled_indices
         if invalid_indices:
             raise ValueError(f"Indices {invalid_indices} are not in unlabeled pool")
 
-        # Update pools
+
         self.labeled_indices.update(new_indices_set)
         self.unlabeled_indices -= new_indices_set
 

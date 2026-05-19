@@ -112,7 +112,7 @@ class EntropySampler(BaseSampler):
         )
 
         all_entropies = []
-        # No need for all_indices list anymore
+
 
         iterator = dataloader
         if self.show_progress:
@@ -135,10 +135,10 @@ class EntropySampler(BaseSampler):
 
         all_entropies = np.concatenate([t.numpy() for t in all_entropies])
 
-        # Ensure we don't try to select more than we have
+
         top_k_indices = np.argpartition(all_entropies, -high_entropy_indices_len)[-high_entropy_indices_len:]
 
-        # Map these indices back to the original unlabeled_indices
+
         selected_indices.extend([unlabeled_indices[i] for i in list(top_k_indices)])
 
         return selected_indices

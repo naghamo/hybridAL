@@ -12,7 +12,7 @@ SAVE_ROOT = Path(f"experiments/{NAME}")
 
 def _filter(name): return name.startswith("Pool_")
 def _parse(run):
-    # Pool_<method>_pool<n>_<dataset>_seed<seed>
+
     parts = run.split("_")
     method = parts[1]
     pool = int(re.sub(r"\D", "", parts[2]))

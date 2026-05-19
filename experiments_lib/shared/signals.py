@@ -140,9 +140,9 @@ def derive_epsilon_grid(per_round_csv: Path,
 
     for target in target_rounds:
         cand: Optional[float] = None
-        # Search ε downward; pick smallest ε where some streak of length k
-        # ending at or before `target` exists in the mean trajectory.
-        # Use a discrete grid of candidate ε values from the mean trajectory.
+
+
+
         candidate_eps = sorted({means[rd] for rd in sorted_rounds if rd <= target}, reverse=True)
         for eps in candidate_eps:
             streak = 0
@@ -163,7 +163,7 @@ def derive_epsilon_grid(per_round_csv: Path,
                 )
                 break
         if cand is None:
-            # Fallback: use the value at the target round as a "loose" ε.
+
             cand = means.get(target, max(means.values()))
             rationale_lines.append(
                 f"  target round={target} → ε={cand:.4f} (no k={k} streak ≤ target; using mean({target}))"

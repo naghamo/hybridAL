@@ -31,7 +31,7 @@ STRATEGY_COLORS = {"RetrainStrategy": "#2196F3", "FineTuneStrategy": "#FF5722"}
 def load_results(base_dir, subset_label):
     """Load all result JSONs for a given subset size, grouped by dataset and strategy."""
     pattern = os.path.join(base_dir, f"subset_{subset_label}", "**", "*.json")
-    results = {}  # (dataset, strategy) -> [f1 scores]
+    results = {}
     for path in glob.glob(pattern, recursive=True):
         try:
             d = json.load(open(path))
@@ -55,8 +55,8 @@ def main():
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
 
-    # Collect all results
-    data = {}  # (dataset, strategy) -> {subset_label -> [f1 scores]}
+
+    data = {}
     for subset in args.subsets:
         results = load_results(args.base_dir, subset)
         for (dataset, strategy), f1s in results.items():
@@ -95,14 +95,14 @@ def main():
             ax.fill_between(x_pos, means - stds, means + stds,
                             alpha=0.15, color=color)
 
-            # Find stable point for this strategy (change < 0.1 F1)
+
             for i in range(1, len(means)):
                 if not np.isnan(means[i]) and not np.isnan(means[i-1]):
                     if abs(means[i] - means[i-1]) < 0.1:
                         stable_per_dataset.setdefault(dataset, x_labels[i-1])
                         break
 
-        # Draw vertical line at stable point (most conservative across strategies)
+
         stable = stable_per_dataset.get(dataset)
         if stable and stable in x_labels:
             ax.axvline(x=x_labels.index(stable), color="red", linestyle="--",
@@ -122,10 +122,10 @@ def main():
     plt.savefig(args.output, dpi=150, bbox_inches="tight")
     print(f"Saved: {args.output}")
 
-    # Choose stable subset: most conservative (largest) stable point across all datasets
+
     all_stable = [v for v in stable_per_dataset.values() if v in x_labels]
     if all_stable:
-        # Pick the largest stable point seen across datasets
+
         stable_subset = sorted(all_stable, key=lambda s: int(s) if s != "full" else 999999)[-1]
     else:
         stable_subset = x_labels[-1]

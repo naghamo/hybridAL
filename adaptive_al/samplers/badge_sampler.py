@@ -37,13 +37,13 @@ def _get_penultimate_module(model):
         NotImplementedError: If the architecture is not recognized.
     """
     if hasattr(model, 'pre_classifier'):
-        # DistilBERT: pre_classifier → classifier
+
         return model.pre_classifier
     elif hasattr(model, 'classifier') and hasattr(model.classifier, 'dense'):
-        # RoBERTa: classifier.dense → dropout → out_proj
+
         return model.classifier.dense
     elif hasattr(model, 'bert') and hasattr(model.bert, 'pooler'):
-        # BERT: bert.pooler.dense → classifier
+
         return model.bert.pooler.dense
     raise NotImplementedError(
         f"BADGE penultimate module detection not supported for {type(model).__name__}. "
@@ -91,18 +91,18 @@ def _compute_gradient_embeddings(model, dataloader, device):
 
         handle.remove()
 
-        logits = outputs.logits                                    # (B, C)
-        probs = F.softmax(logits, dim=-1)                          # (B, C)
-        pred_classes = probs.argmax(dim=-1)                        # (B,)
+        logits = outputs.logits
+        probs = F.softmax(logits, dim=-1)
+        pred_classes = probs.argmax(dim=-1)
 
-        h = captured[0]                                            # (B, hidden)
-        # Analytic gradient: scale = p(predicted_class) - 1
-        scale = probs[range(len(pred_classes)), pred_classes] - 1.0  # (B,)
-        g = h * scale.unsqueeze(-1)                                # (B, hidden)
+        h = captured[0]
+
+        scale = probs[range(len(pred_classes)), pred_classes] - 1.0
+        g = h * scale.unsqueeze(-1)
 
         all_embeddings.append(g.cpu())
 
-    return torch.cat(all_embeddings, dim=0).numpy()                # (N, hidden)
+    return torch.cat(all_embeddings, dim=0).numpy()
 
 
 def _kmeans_plusplus_init(embeddings, k, rng):
@@ -126,18 +126,18 @@ def _kmeans_plusplus_init(embeddings, k, rng):
     centers = [first]
 
     for _ in range(k - 1):
-        # Distance from each point to the nearest current center
-        center_embeds = embeddings[centers]                        # (c, D)
-        diff = embeddings[:, None, :] - center_embeds[None, :, :] # (N, c, D)
-        sq_dists = (diff ** 2).sum(axis=-1)                        # (N, c)
-        min_sq_dists = sq_dists.min(axis=1)                        # (N,)
 
-        # Already-selected centers have distance 0
+        center_embeds = embeddings[centers]
+        diff = embeddings[:, None, :] - center_embeds[None, :, :]
+        sq_dists = (diff ** 2).sum(axis=-1)
+        min_sq_dists = sq_dists.min(axis=1)
+
+
         min_sq_dists[centers] = 0.0
 
         total = min_sq_dists.sum()
         if total == 0.0:
-            # All remaining points coincide with a center — fall back to random
+
             remaining = [i for i in range(n) if i not in centers]
             if not remaining:
                 break
@@ -197,7 +197,7 @@ class BADGESampler(BaseSampler):
         if len(unlabeled_indices) <= num_samples:
             return unlabeled_indices
 
-        # Optionally pre-filter to a random subset for efficiency on large pools
+
         if self.random_subset_size > 0 and len(unlabeled_indices) > self.random_subset_size:
             candidate_indices = random.sample(unlabeled_indices, self.random_subset_size)
         else:

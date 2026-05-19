@@ -26,7 +26,7 @@ def figsize_for(rows: int, cols: int, base_w: float = 8.0, base_h: float = 6.0):
     return (base_w * cols, base_h * rows)
 
 
-# Color cycle used consistently across aggregator plots.
+
 def signal_colors(signals):
     cmap = plt.get_cmap("tab10")
     return {s: cmap(i % 10) for i, s in enumerate(signals)}

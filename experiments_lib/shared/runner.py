@@ -48,7 +48,7 @@ def _print_plan_dry_run(plan: ExperimentPlan,
     if len(slice_entries) > 5:
         print(f"  ... ({len(slice_entries) - 5} more)")
     print()
-    est_minutes = len(slice_entries) * 6  # ~6 min/run heuristic
+    est_minutes = len(slice_entries) * 6
     print(f"estimated wall-clock @ 6 min/run on this GPU: ~{est_minutes / 60:.1f} h")
 
 
@@ -80,9 +80,9 @@ def run_plan_on_gpu(plan: ExperimentPlan,
         gpu_label = f"gpu{args.gpu}"
 
     def _cfg_preview(entry: Dict[str, Any]) -> str:
-        # Defer to the runner — we don't want to construct ExperimentConfig
-        # in dry-run because that pulls in torch via adaptive_al imports.
-        # Just describe the entry's experiment name (lazy import).
+
+
+
         try:
             cfg = make_cfg(args, entry)
             return f"experiment_name={cfg.experiment_name}  data={cfg.data}  seed={cfg.seed}"
@@ -93,8 +93,8 @@ def run_plan_on_gpu(plan: ExperimentPlan,
         _print_plan_dry_run(plan, slice_entries, args, _cfg_preview)
         return
 
-    # Actual execution path — imports torch only here.
-    from adaptive_al.active_learning import ActiveLearning  # noqa: E402
+
+    from adaptive_al.active_learning import ActiveLearning
 
     plan.save_root.mkdir(parents=True, exist_ok=True)
 
@@ -137,7 +137,7 @@ def _rebalance_gpus_from_summary_csv(csv_path: str,
         print(f"[runner] {csv_path} empty/missing — keeping default GPU split.")
         return default
 
-    # Sum training_time per dataset
+
     by_ds: Dict[str, float] = {}
     counts: Dict[str, int] = {}
     for r in rows:
@@ -149,7 +149,7 @@ def _rebalance_gpus_from_summary_csv(csv_path: str,
         counts[ds] = counts.get(ds, 0) + 1
     means = {ds: by_ds[ds] / counts[ds] for ds in by_ds if counts[ds] > 0}
 
-    # If the existing default already balances within 20%, keep it.
+
     cur_g0 = sum(means.get(d, 0.0) for d in default[0])
     cur_g1 = sum(means.get(d, 0.0) for d in default[1])
     total = cur_g0 + cur_g1
@@ -161,8 +161,8 @@ def _rebalance_gpus_from_summary_csv(csv_path: str,
               f"GPU0={default[0]}  GPU1={default[1]}.")
         return default
 
-    # Greedy rebalance: assign each dataset (descending mean time) to the
-    # currently-lighter GPU.
+
+
     sorted_ds = sorted(means.items(), key=lambda x: -x[1])
     g0: List[str] = []
     g1: List[str] = []

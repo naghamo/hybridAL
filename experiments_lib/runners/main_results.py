@@ -46,14 +46,14 @@ METHODS = [
 
 
 def add_extra_args(p: argparse.ArgumentParser) -> None:
-    # Primary HybridAL signal
+
     p.add_argument("--signal-alpha", required=True,
                    help="Primary HybridAL signal name (e.g. delta_spectral_alpha).")
     p.add_argument("--epsilon-alpha", type=float, required=True,
                    help="Raw ε for the primary signal (no calibration normalizer).")
     p.add_argument("--k-alpha", type=int, required=True,
                    help="k for the primary signal.")
-    # Secondary HybridAL signal
+
     p.add_argument("--signal-acc", required=True,
                    help="Secondary HybridAL signal name (e.g. delta_accuracy).")
     p.add_argument("--epsilon-acc", type=float, required=True,
@@ -84,7 +84,7 @@ def _strategy_for(method: str, args: argparse.Namespace):
     if method == "NewOnly":
         return "NewOnlyStrategy", {}
     if method == "HybridAL_alpha":
-        # Phase-2: ε at signal's raw scale, no calibration normalizer.
+
         return "DeltaF1Strategy", {
             "epsilon": args.epsilon_alpha,
             "k": args.k_alpha,

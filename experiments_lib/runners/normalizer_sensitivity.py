@@ -30,7 +30,7 @@ from ._base import dispatch, make_runner_parser
 NAME = "normalizer_sensitivity"
 SAVE_ROOT = Path(f"experiments/{NAME}")
 
-# Default location for IMDb seed-42 calibration result (post-rerun).
+
 CALIB_RESULT = Path("_calibration_results/calibration_imdb_seed42_v2")
 
 

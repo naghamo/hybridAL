@@ -37,7 +37,7 @@ dataset_labels = {
         "Entertainment & Music", "Family & Relationships", "Politics & Government"
     ],
 }
-# Legacy hardcoded switch rounds for old results that predate strategy_metadata tracking
+
 _legacy_switch_rounds = {
     "agnews": {42: 10, 43: 10, 44: 10},
     "imdb": {42: 12, 43: 9, 44: 11},
@@ -50,8 +50,8 @@ strategy_names = {
     "DeltaF1Strategy": "HybridAL",
     "FixedSwitchStrategy": "Fixed Switch",
 }
-dpi = 250  # DPI for saving figures
-figsize = (6, 4)  # Default figure size
+dpi = 250
+figsize = (6, 4)
 
 
 def filter_experiments_df(df: pd.DataFrame, **filter_kwargs):
@@ -98,7 +98,7 @@ def get_experiments_df(main_results_path: str):
 
     df = pd.json_normalize(all_data, sep='_')
 
-    # Core columns always present
+
     cols_to_keep = [
         'total_rounds', 'round_val_stats',
         'cfg_seed', 'cfg_strategy_class',
@@ -110,12 +110,12 @@ def get_experiments_df(main_results_path: str):
         'final_test_stats_loss', 'final_test_stats_f1_score', 'final_test_stats_accuracy',
         'confusion_matrix', 'folder_name',
     ]
-    # strategy_metadata columns only present in newer result files
+
     for meta_col in ['strategy_metadata_switch_round', 'strategy_metadata_switched']:
         if meta_col in df.columns:
             cols_to_keep.append(meta_col)
 
-    # Keep only columns that exist (older results may lack new fields)
+
     cols_to_keep = [c for c in cols_to_keep if c in df.columns]
     df = df[cols_to_keep]
 
@@ -139,7 +139,7 @@ def get_experiments_df(main_results_path: str):
     }
     df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
 
-    # Ensure switch_round column exists even for old results (NaN)
+
     if 'switch_round' not in df.columns:
         df['switch_round'] = float('nan')
 
@@ -234,7 +234,7 @@ def plot_f1_vs_time_avg(
         strategies = list(strategy_names.keys())
 
         for s_i, strategy in enumerate(strategies):
-            # Gather the time points and F1 scores for each seed
+
             seed_curves = []
             for seed in sorted(experiments_df['seed'].unique()):
                 is_delta_f1 = (strategy == 'DeltaF1Strategy')
@@ -248,7 +248,7 @@ def plot_f1_vs_time_avg(
                     validation_fraction=hybrid_hyper.get('validation_fraction') if is_delta_f1 else None
                 )
 
-                # Build cumulative time curve
+
                 if row.empty:
                     continue
                 round_val_stats = row['round_val_stats'].values[0]
@@ -262,7 +262,7 @@ def plot_f1_vs_time_avg(
                 if len(times) >= 2:
                     seed_curves.append((times, f1s))
 
-            # Set the common time grid to be between 0 and the minimum max time across seeds
+
             if not seed_curves:
                 continue
             max_times = [curve[0][-1] for curve in seed_curves]
@@ -270,7 +270,7 @@ def plot_f1_vs_time_avg(
 
             grid = np.linspace(0.0, t_max_common, n_grid)
 
-            # Interpolate each seed's F1 scores onto the common time grid
+
             interp_f1s = []
             for times, f1s in seed_curves:
                 f_on_grid = np.interp(grid, times, f1s)
@@ -282,11 +282,11 @@ def plot_f1_vs_time_avg(
             interp_f1s = np.vstack(interp_f1s)
             mean_f1 = interp_f1s.mean(axis=0)
 
-            # Calculate standard deviation for the band
+
             std = interp_f1s.std(axis=0)
             lower, upper = mean_f1 - std, mean_f1 + std
 
-            # Plot mean and band per strategy
+
             label = strategy_names[strategy]
             color = color_map(s_i / len(color_map.colors))
             plt.plot(grid, mean_f1, label=label, color=color, lw=2.0)
@@ -341,12 +341,12 @@ def plot_hybrid_hyper_variations(experiments_df: pd.DataFrame, best_hybrid_hyper
             plt.plot(means.index, means.values, marker='o', label=dataset_names.get(dataset, dataset),
                      color=color_map(i))
 
-            # Std band (mean +- std)
+
             stds = subset.groupby(param)['test_f1_score'].std()
             lower, upper = means - stds, means + stds
             plt.fill_between(means.index, lower, upper, color=color_map(i), alpha=0.15, linewidth=0)
 
-            # Buffering the y limits for legend aesthetics
+
             band_uppers = means + stds
             band_lowers = means - stds
             y_lim_upper = band_uppers.max() + 0.05
@@ -384,7 +384,7 @@ def plot_test_f1_bar_chart(experiments_df: pd.DataFrame, best_hybrid_hyper: dict
 
     plt.figure(figsize=figsize)
 
-    # Fixed color mapping to match the f1 vs time plot
+
     cmap = plt.get_cmap("Set2")
     strategy_colors = {
         "New only": cmap(0),
@@ -408,17 +408,17 @@ def plot_test_f1_bar_chart(experiments_df: pd.DataFrame, best_hybrid_hyper: dict
 
         results.append((name, mean_f1, std_f1))
 
-    # Sort by mean F1 score
-    results.sort(key=lambda x: x[1])  # ascending order
+
+    results.sort(key=lambda x: x[1])
 
     bars = []
-    # Plot Sorted bars
+
     for name, mean_f1, std_f1 in results:
         color = strategy_colors.get(name, "#888888")
         bar = plt.bar(name, mean_f1, yerr=std_f1, capsize=5, color=color)
         bars.append((bar, mean_f1, std_f1))
 
-    # Print bar values atop bars
+
     for bar, mean, std in bars:
         for rect in bar:
             plt.text(
@@ -458,16 +458,16 @@ def plot_confusion_heatmaps_hybrid(experiments_df: pd.DataFrame, hybrid_hyper: d
             validation_fraction=hybrid_hyper.get('validation_fraction')
         )
 
-        # Sum the confusion matrices
+
         num_labels = len(relevant_hybrid['confusion_matrix'].values[0])
         sum_cm = np.zeros((num_labels, num_labels))
         for cm in relevant_hybrid['confusion_matrix']:
             sum_cm += np.array(cm)
 
-        # Normalize the summed confusion matrix
+
         avg_cm = sum_cm / sum_cm.sum(axis=1, keepdims=True)
 
-        # Round and renormalize again to avoid floating point issues
+
         avg_cm = np.round(avg_cm, 2)
         avg_cm = avg_cm / avg_cm.sum(axis=1, keepdims=True)
 
@@ -478,7 +478,7 @@ def plot_confusion_heatmaps_hybrid(experiments_df: pd.DataFrame, hybrid_hyper: d
             cbar_kws={"shrink": 0.8, "label": "Proportion"}
         )
 
-        # Rename the ticks to be the label meanings
+
         ax.set_xticklabels(dataset_labels[dataset], rotation=45, ha='right')
         ax.set_yticklabels(dataset_labels[dataset], rotation=0)
 
@@ -549,25 +549,25 @@ def get_significance_table(experiments_df: pd.DataFrame, hybrid_hyper: dict) -> 
             rows.append({
                 'Dataset':              dataset_names.get(dataset, dataset),
                 'Baseline':             strategy_names.get(strategy, strategy),
-                # F1
+
                 'Hybrid F1':            round(h_f1.mean(), 4),
                 'Base F1':              round(b_f1.mean(), 4),
                 'ΔF1':                  round(h_f1.mean() - b_f1.mean(), 4),
                 'F1 p-value':           p_f1,
                 'F1 sig':               p_f1 < 0.05 if not np.isnan(p_f1) else False,
-                # Accuracy
+
                 'Hybrid Acc':           round(h_acc.mean(), 4) if len(h_acc) else float('nan'),
                 'Base Acc':             round(b_acc.mean(), 4) if len(b_acc) else float('nan'),
                 'ΔAcc':                 round(h_acc.mean() - b_acc.mean(), 4) if len(h_acc) and len(b_acc) else float('nan'),
                 'Acc p-value':          p_acc,
                 'Acc sig':              p_acc < 0.05 if not np.isnan(p_acc) else False,
-                # Loss
+
                 'Hybrid Loss':          round(h_loss.mean(), 4) if len(h_loss) else float('nan'),
                 'Base Loss':            round(b_loss.mean(), 4) if len(b_loss) else float('nan'),
                 'ΔLoss':                round(h_loss.mean() - b_loss.mean(), 4) if len(h_loss) and len(b_loss) else float('nan'),
                 'Loss p-value':         p_loss,
                 'Loss sig':             p_loss < 0.05 if not np.isnan(p_loss) else False,
-                # Training time
+
                 'Hybrid Time (s)':      round(h_time.mean(), 1) if len(h_time) else float('nan'),
                 'Base Time (s)':        round(b_time.mean(), 1) if len(b_time) else float('nan'),
                 'ΔTime (s)':            round(h_time.mean() - b_time.mean(), 1) if len(h_time) and len(b_time) else float('nan'),
@@ -604,7 +604,7 @@ def plot_training_time_comparison(experiments_df: pd.DataFrame, hybrid_hyper: di
                 k=hybrid_hyper.get('k') if is_delta else None,
                 validation_fraction=hybrid_hyper.get('validation_fraction') if is_delta else None,
             )
-            # filter to default backbone / sampler if columns present
+
             if 'model' in sub.columns:
                 sub = sub[sub['model'].isin(['distilbert-base-uncased', None, float('nan')]) |
                           sub['model'].isna()]
@@ -709,7 +709,7 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
             color = cmap.colors[color_i % len(cmap.colors)]
             color_i += 1
 
-            # Prefer switch_round from experiment data; fall back to legacy hardcoded dict
+
             switch_round_val = info['switch_round'].values[0] if 'switch_round' in info.columns else None
             if switch_round_val is None or (isinstance(switch_round_val, float) and np.isnan(switch_round_val)):
                 switch_round_val = _legacy_switch_rounds.get(dataset, {}).get(j, None)
@@ -737,9 +737,9 @@ def plot_f1_vs_round_switch(experiments_df: pd.DataFrame, best_hybrid_hyper: dic
         plt.show()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Comparison plots (backbone / signal / sampler / fixed-switch / per-dataset)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _BACKBONE_COLORS = {
     "distilbert-base-uncased": "#2196F3",
@@ -775,7 +775,7 @@ _SIGNAL_DISPLAY = {
 }
 _COMPARISON_STRATEGIES = ["RetrainStrategy", "FineTuneStrategy", "NewOnlyStrategy", "DeltaF1Strategy"]
 
-# (column_key, y-axis label, scale_factor, lower_is_better)
+
 _METRICS = [
     ("test_f1_score",  "Test F1 (%)",            100, False),
     ("test_accuracy",  "Test Accuracy (%)",       100, False),
@@ -862,7 +862,7 @@ def plot_signal_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
     sig_labels = [_SIGNAL_DISPLAY.get(s, s) for s in signals]
     sig_colors = [_SIGNAL_COLORS.get(s, "gray") for s in signals]
 
-    # Collect per-signal subsets once
+
     subs = {}
     for sig in signals:
         if sig == "delta_f1":
@@ -872,7 +872,7 @@ def plot_signal_comparison(experiments_df: pd.DataFrame, hybrid_hyper: dict,
             if "signal" in sub.columns:
                 sub = sub[sub["signal"].isna() | (sub["signal"] == "delta_f1")]
         else:
-            sub = experiments_df[experiments_df["signal"] == sig] \
+            sub = experiments_df[experiments_df["signal"] == sig]\
                 if "signal" in experiments_df.columns else pd.DataFrame()
         subs[sig] = sub
 
@@ -1057,9 +1057,9 @@ def plot_per_dataset_f1(experiments_df: pd.DataFrame, hybrid_hyper: dict,
         plt.show()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LaTeX table generation
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _STRATEGY_ORDER   = ['RetrainStrategy', 'FineTuneStrategy', 'DeltaF1Strategy', 'NewOnlyStrategy']
 _STRATEGY_DISPLAY = {
@@ -1114,11 +1114,11 @@ def generate_latex_table(experiments_df: pd.DataFrame,
     """
     from pathlib import Path as _Path
 
-    group_col   = 'dataset' if table_mode in ('main', 'fixed_switch', 'signal') else \
+    group_col   = 'dataset' if table_mode in ('main', 'fixed_switch', 'signal') else\
                   'model'   if table_mode == 'backbones' else 'sampler'
     group_names = dataset_names if group_col == 'dataset' else {}
 
-    # ── significance: HybridAL vs each baseline per group ───────────────── #
+
     sig = {}
     for gv in experiments_df[group_col].dropna().unique():
         gdf  = experiments_df[experiments_df[group_col] == gv]
@@ -1135,7 +1135,7 @@ def generate_latex_table(experiments_df: pd.DataFrame,
                 _, p = scipy_stats.ttest_ind(hf1, bf1, equal_var=False)
                 sig[(gv, s)] = (p < 0.05 and hf1.mean() > bf1.mean())
 
-    # ── row builder ──────────────────────────────────────────────────────── #
+
     def make_row(strat_key, display, rdf, is_first, n, rounds_val, add_cline):
         if rdf.empty:
             return []
@@ -1160,7 +1160,7 @@ def generate_latex_table(experiments_df: pd.DataFrame,
             out.append(r'\cline{1-4}')
         return out
 
-    # ── body ─────────────────────────────────────────────────────────────── #
+
     body  = []
     groups = sorted(experiments_df[group_col].dropna().unique())
     for g_idx, gv in enumerate(groups):
@@ -1204,7 +1204,7 @@ def generate_latex_table(experiments_df: pd.DataFrame,
                 body += make_row(strat, _STRATEGY_DISPLAY.get(strat, strat),
                                  sub, i == 0, len(present), rounds_val, i < len(present)-1)
 
-    # ── captions & labels ────────────────────────────────────────────────── #
+
     _caps = {
         'main':
             r"Macro-F1, accuracy, training time, and rounds across strategies and datasets "

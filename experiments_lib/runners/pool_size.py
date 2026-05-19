@@ -48,7 +48,7 @@ def make_cfg(args: argparse.Namespace, entry: dict):
     if method == "Retrain":
         strategy_class, strategy_kwargs = "RetrainStrategy", {}
     else:
-        # Phase-2: ε at the signal's raw scale, no calibration normalizer.
+
         strategy_class, strategy_kwargs = "DeltaF1Strategy", {
             "epsilon": args.epsilon, "k": args.k,
             "signal": args.signal, "signal_normalizer": None,

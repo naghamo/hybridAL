@@ -6,9 +6,9 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     from scipy.stats import ttest_ind, ttest_rel
-except Exception:  # pragma: no cover
-    ttest_ind = None  # type: ignore
-    ttest_rel = None  # type: ignore
+except Exception:
+    ttest_ind = None
+    ttest_rel = None
 
 
 def _finite(values: Iterable) -> List[float]:

@@ -70,7 +70,7 @@ def main(args: argparse.Namespace) -> None:
         return
     write_default_csvs(SAVE_ROOT, rows_summary, rows_per_round)
 
-    # Tables A (per-backbone): method × dataset → mean F1
+
     backbones = sorted({r["backbone"] for r in rows_summary})
     methods = sorted({r["method"] for r in rows_summary})
     datasets = sorted({r["data"] for r in rows_summary})
@@ -88,7 +88,7 @@ def main(args: argparse.Namespace) -> None:
                 f1_cells.append(cell(vs))
             lines.append(f"{m:<22} | " + " | ".join(f"{c:>20}" for c in f1_cells))
 
-        # t-test row: HybridAL vs each other method, per dataset
+
         lines.append("")
         lines.append(f"{'t-test (HybridAL vs ?)':<24} | " + " | ".join(f"{d:>20}" for d in datasets))
         lines.append("-" * (24 + 3 + (20 + 3) * len(datasets)))
@@ -97,8 +97,8 @@ def main(args: argparse.Namespace) -> None:
                 continue
             ps = []
             for d in datasets:
-                # Paired by seed: same seed used across methods on the same
-                # (backbone, dataset), so the design is matched.
+
+
                 a_seeded = sorted(
                     (int(r["seed"]), float(r["test_f1"])) for r in rows_summary
                     if r["backbone"] == bb and r["method"] == "HybridAL"
@@ -115,7 +115,7 @@ def main(args: argparse.Namespace) -> None:
                 ps.append(f"p={p:.3f}{stars_for_p(p)}" if p is not None else "—")
             lines.append(f"{('vs ' + m):<24} | " + " | ".join(f"{c:>20}" for c in ps))
 
-    # Table B: training time
+
     lines.append("\n=== TABLE B — training time (seconds, mean ± std) ===")
     lines.append(f"{'method':<22} | " + " | ".join(f"{d:>16}" for d in datasets))
     for m in methods:
@@ -126,7 +126,7 @@ def main(args: argparse.Namespace) -> None:
             cells.append(cell(vs, fmt="{:.0f}"))
         lines.append(f"{m:<22} | " + " | ".join(f"{c:>16}" for c in cells))
 
-    # Table C: backbone summary (mean F1 across all 6 datasets per (method, backbone))
+
     lines.append("\n=== TABLE C — backbone summary (mean F1 across all 6 datasets) ===")
     lines.append(f"{'method':<22} | " + " | ".join(f"{bb:>22}" for bb in backbones))
     for m in methods:

@@ -47,10 +47,10 @@ import sys
 from experiments_lib.shared.runner import add_common_runner_args
 
 
-# Experiment registry — single source of truth for which experiments exist
-# and how they wire into the unified CLI. Each tuple is:
-#   (cli_name, runner_module, optional_aggregator_module, description).
-# Aggregator can be None if not yet wired (Exp 0 has no aggregator).
+
+
+
+
 EXPERIMENTS = [
     ("n_sensitivity",          "n_sensitivity",          "n_sensitivity",
      "Exp 0 — N (random_subset_size) sensitivity"),
@@ -87,7 +87,7 @@ def _build_run_parser(subparsers: argparse._SubParsersAction) -> None:
     for cli_name, runner_mod, _agg_mod, desc in EXPERIMENTS:
         sp = exp_sub.add_parser(cli_name, help=desc, description=desc)
         add_common_runner_args(sp)
-        # Pull experiment-specific flags from the runner module.
+
         mod = importlib.import_module(f"experiments_lib.runners.{runner_mod}")
         if hasattr(mod, "add_extra_args"):
             mod.add_extra_args(sp)
