@@ -199,8 +199,7 @@ test NLL, wall-clock training time, switch round, and per-round
 metrics. These CSVs back every numerical claim in the paper. The
 signal-ablation CSV omits test NLL; downstream analyses that need it
 read `final_test_stats.loss` from each run's `results_*.json`.
-Plotting and LaTeX-table scripts that consume them are not part of
-this code release.
+
 
 ---
 
