@@ -3,15 +3,9 @@
 Every experiment's aggregator follows the same pattern:
   1. Walk `experiments/<name>/<run_dir>/results_*.json`.
   2. For each run, extract the (cfg, switch, F1, time, per-round signals).
-  3. Build experiment-specific tables/plots.
-
-This module just provides the walker and writes the canonical
-`_summary.csv` + `_per_round.csv` files. Per-experiment aggregators add
-their own plots and tables on top.
+  3. Write `_summary.csv` + `_per_round.csv`.
 """
 import json
-import math
-from collections import defaultdict
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List, Optional, Tuple
