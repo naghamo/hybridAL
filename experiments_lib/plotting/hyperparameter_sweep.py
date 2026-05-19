@@ -1,10 +1,10 @@
-"""Hyperparameter-sensitivity figure: 2x2 grid of line plots.
+"""Hyperparameter-sensitivity figure: 2x4 grid of line plots.
 
-For each signal ($\\Delta\\alpha$, $\\Delta$Acc) we draw two panels:
+For each signal ($\\Delta\\alpha$, $\\Delta$Acc) we draw four panels:
 
-  Left  panel : x = k, $\\varepsilon$ fixed to the best value; y = mean
-                val F1 across (dataset, seed); point color = switch rate.
-  Right panel : the dual — x = $\\varepsilon$, k fixed to the best value.
+  Two NLL panels: x = k (ε fixed to ε*) and x = ε (k fixed to k*),
+                  y = mean val NLL; point color = switch rate.
+  Two time panels: the dual sweeps for mean training time.
 
 Best $(\\varepsilon^\\star, k^\\star)$ comes from the existing
 `experiments/hyperparameter_tuning/chosen_eps_k_<signal>.json` files —
@@ -65,7 +65,7 @@ def load_chosen(signal):
 
 
 def load_runs():
-    """Return cells[(signal, eps, k)] = list of (val_f1, time, switched)."""
+    """Return cells[(signal, eps, k)] = list of (val_nll, time, switched)."""
     cells = defaultdict(list)
     with SUMMARY.open() as fh:
         for r in csv.DictReader(fh):
@@ -74,20 +74,20 @@ def load_runs():
                 eps = float(r["epsilon"]); k = int(r["k"])
             except ValueError:
                 continue
-            f1 = r["final_val_f1"]
-            tm = r["training_time_total"]
-            if not f1 or not tm:
+            nll = r.get("final_val_loss")
+            tm = r.get("training_time_total")
+            if not nll or not tm:
                 continue
             switched = bool(r.get("switch_round"))
-            cells[(sig, eps, k)].append((float(f1), float(tm), switched))
+            cells[(sig, eps, k)].append((float(nll), float(tm), switched))
     return cells
 
 
 def _agg(cell_runs, metric):
-    """metric is 'f1' or 'time' — picks the right scalar from each tuple."""
+    """metric is 'nll' or 'time' — picks the right scalar from each tuple."""
     if not cell_runs:
         return None
-    if metric == "f1":
+    if metric == "nll":
         vals = [t[0] for t in cell_runs]
     else:
         vals = [t[1] for t in cell_runs]
@@ -167,7 +167,7 @@ def main():
         es = sorted({e for (s, e, k) in cells if s == sig_key
                      and k == k_star})
         per = {}
-        for metric in ("f1", "time"):
+        for metric in ("nll", "time"):
             per[metric] = {
                 "k": [_agg(cells[(sig_key, eps_star, k)], metric) for k in ks],
                 "e": [_agg(cells[(sig_key, e, k_star)],   metric) for e in es],
@@ -176,24 +176,24 @@ def main():
 
     # Per-metric shared y-range across the two signals.
     y_range = {}
-    for metric in ("f1", "time"):
+    for metric in ("nll", "time"):
         means = []
         for _, _, _, _, _, per in panel_data:
             for v in per[metric]["k"] + per[metric]["e"]:
                 if v is not None:
                     means.append(v["mean"])
         if means:
-            pad = 0.005 if metric == "f1" else 30.0
+            pad = 0.02 if metric == "nll" else 30.0
             y_range[metric] = (min(means) - pad, max(means) + pad)
 
-    metric_labels = {"f1": "mean val F1", "time": "mean time (s)"}
-    metric_titles = {"f1": "F1", "time": "time"}
+    metric_labels = {"nll": "mean val NLL", "time": "mean time (s)"}
+    metric_titles = {"nll": "NLL", "time": "time"}
 
     # Layout: 2 rows × 4 cols. Each row is one signal, with 4 panels:
-    # F1 vs k | F1 vs ε | time vs k | time vs ε.
+    # NLL vs k | NLL vs ε | time vs k | time vs ε.
     for sig_idx, (sig_disp, eps_star, k_star,
                   ks, es, per) in enumerate(panel_data):
-        for met_idx, metric in enumerate(("f1", "time")):
+        for met_idx, metric in enumerate(("nll", "time")):
             col_offset = met_idx * 2
             ax_k = fig.add_subplot(gs[sig_idx, col_offset])
             ax_e = fig.add_subplot(gs[sig_idx, col_offset + 1])

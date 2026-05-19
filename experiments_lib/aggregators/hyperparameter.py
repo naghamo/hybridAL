@@ -44,6 +44,7 @@ from ._base import build_summary_and_per_round, write_default_csvs
 NAME = "hyperparameter_tuning"
 SAVE_ROOT = Path(f"experiments/{NAME}")
 TIE_BREAK_F1_TOL = 0.005   # candidates within 0.5 % F1 of top are tied
+SCORE_NLL_WEIGHT = 0.5     # lambda in score = T/T_min + lambda * NLL/NLL_min
 
 
 def _filter(name: str) -> bool:
@@ -86,23 +87,23 @@ def _make_heatmap(by_eps_k_f1: dict, signal: str, save_path: Path) -> None:
 
 
 def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
-                     by_eps_k_test_f1: dict, by_eps_k_time: dict) -> dict:
-    """Pick (ε, k) for one signal: argmin T_eff among cells whose mean
-    val F1 is within 0.5 % of the grid top.
+                     by_eps_k_test_f1: dict, by_eps_k_time: dict,
+                     by_eps_k_val_nll: dict) -> dict:
+    """Pick (ε, k) for one signal in two stages:
 
-        T_eff(ε, k) = mean_training_time(ε, k) / switch_rate(ε, k)
+    1. F1-tied set:
+            C = {(ε, k) : F1(ε, k) >= 0.995 * F1_max}.
 
-    Why val F1 (not test): test set is held out for final reporting in
-    Exp 3; selecting on test would be data leakage.
+    2. Among C, minimise the (time, NLL) combined score:
+            score(ε, k) = T(ε, k) / T_min^C
+                        + λ * NLL(ε, k) / NLL_min^C,
+       with λ = SCORE_NLL_WEIGHT (0.5 by default). Per-axis
+       normalisation removes the time/NLL unit gap; λ < 1 reflects
+       HybridAL's primary goal of saving time without sacrificing
+       calibration on the already-F1-tied set.
 
-    Why T_eff as the tie-break: among cells with equivalent val F1, we
-    want the one that delivers reliable time savings. Raw mean training
-    time alone rewards cells that happen to be cheap on some runs while
-    failing to fire on others (zero algorithmic value). Dividing by
-    switch_rate = (# of replicas where the strategy actually fired) /
-    (total # of replicas) penalises unreliable cells: a cell that fires
-    in only half of its 6 replicas gets 2× the T_eff of the same raw
-    time on a fully-firing cell.
+    Selection uses VAL F1 and VAL NLL — test set is held out for the
+    main-results table (Exp 3) and selecting on it would be data leakage.
     """
     val_means = {k: safe_mean(v) for k, v in by_eps_k_val_f1.items() if v}
     if not val_means:
@@ -110,39 +111,48 @@ def _pick_best_eps_k(by_eps_k_val_f1: dict, by_eps_k_switch: dict,
     top = max(val_means.values())
     cands = [k for k, m in val_means.items() if top - m <= TIE_BREAK_F1_TOL]
 
-    NEVER_FIRED = float("inf")
-    def _t_eff(key):
-        sws = by_eps_k_switch.get(key, [])
-        ts = by_eps_k_time.get(key, [])
-        if not sws or not ts:
-            return NEVER_FIRED, None, None
-        rate = sum(0 if s is None else 1 for s in sws) / len(sws)
-        if rate == 0:
-            return NEVER_FIRED, mean(ts), 0.0
-        return mean(ts) / rate, mean(ts), rate
+    time_means = {k: mean(by_eps_k_time[k]) for k in cands
+                  if by_eps_k_time.get(k)}
+    nll_means = {k: mean(by_eps_k_val_nll[k]) for k in cands
+                 if by_eps_k_val_nll.get(k)}
+    common = [k for k in cands if k in time_means and k in nll_means]
+    if not common:
+        return {}
 
-    # Sort: smallest T_eff first; on tie, smaller k (preserves the old
-    # secondary key so behaviour is deterministic).
-    cands.sort(key=lambda k: (_t_eff(k)[0], k[1]))
-    eps, k = cands[0]
-    teff, tmean, rate = _t_eff((eps, k))
+    T_min = min(time_means[k] for k in common)
+    NLL_min = min(nll_means[k] for k in common)
 
-    # Diagnostic: also report mean switch round (over fired replicas).
-    sw_list = [s for s in by_eps_k_switch.get((eps, k), []) if s is not None]
+    def _score(key):
+        return (time_means[key] / T_min
+                + SCORE_NLL_WEIGHT * nll_means[key] / NLL_min)
+
+    # Sort: smallest score first; on tie, smaller k (deterministic).
+    common.sort(key=lambda k: (_score(k), k[1]))
+    eps, k = common[0]
+
+    sws = by_eps_k_switch.get((eps, k), [])
+    rate = (sum(0 if s is None else 1 for s in sws) / len(sws)
+            if sws else None)
+    sw_list = [s for s in sws if s is not None]
     sw_mean = mean(sw_list) if sw_list else None
 
     return {
         "epsilon": eps,
         "k": k,
         "mean_val_f1": val_means[(eps, k)],
+        "mean_val_nll": nll_means[(eps, k)],
         "mean_test_f1_at_chosen": safe_mean(by_eps_k_test_f1.get((eps, k), [])),
         "best_val_f1_among_grid": top,
         "tie_break_within_val_f1": TIE_BREAK_F1_TOL,
-        "tie_break_rule": "argmin T_eff = mean_training_time / switch_rate",
+        "tie_break_rule":
+            f"argmin (T/T_min + {SCORE_NLL_WEIGHT} * NLL/NLL_min) "
+            "within val-F1-tied set",
         "n_tied_candidates": len(cands),
-        "mean_train_time_s": tmean,
+        "mean_train_time_s": time_means[(eps, k)],
         "switch_rate": rate,
-        "T_eff_s": (teff if teff != NEVER_FIRED else None),
+        "T_min_in_tied": T_min,
+        "NLL_min_in_tied": NLL_min,
+        "score": _score((eps, k)),
         "mean_switch_round": sw_mean,
         "all_replicas_switched": rate == 1.0 if rate is not None else False,
     }
@@ -162,6 +172,7 @@ def main(args: argparse.Namespace) -> None:
     # is held out for the final paper table (Exp 3) and selecting on it
     # would be data leakage.
     by_signal_eps_k_f1 = defaultdict(lambda: defaultdict(list))   # final-round val F1
+    by_signal_eps_k_nll = defaultdict(lambda: defaultdict(list))  # final-round val NLL
     by_signal_eps_k_sw = defaultdict(lambda: defaultdict(list))
     by_signal_eps_k_time = defaultdict(lambda: defaultdict(list))
     by_signal_eps_k_test = defaultdict(lambda: defaultdict(list)) # diagnostic only
@@ -173,6 +184,8 @@ def main(args: argparse.Namespace) -> None:
             continue
         key = (float(r["epsilon"]), int(r["k"]))
         by_signal_eps_k_f1[sig][key].append(float(val_f1))
+        if r.get("final_val_loss") is not None:
+            by_signal_eps_k_nll[sig][key].append(float(r["final_val_loss"]))
         if r.get("test_f1") is not None:
             by_signal_eps_k_test[sig][key].append(float(r["test_f1"]))
         if r.get("training_time_total") is not None:
@@ -203,7 +216,9 @@ def main(args: argparse.Namespace) -> None:
 
         # Choose
         time_pivot = by_signal_eps_k_time[signal]
-        chosen = _pick_best_eps_k(val_pivot, sw_pivot, test_pivot, time_pivot)
+        nll_pivot = by_signal_eps_k_nll[signal]
+        chosen = _pick_best_eps_k(val_pivot, sw_pivot, test_pivot,
+                                  time_pivot, nll_pivot)
         chosen["signal"] = signal
         out_json = SAVE_ROOT / f"chosen_eps_k_{signal}.json"
         out_json.write_text(json.dumps(chosen, indent=2))
@@ -216,27 +231,30 @@ def main(args: argparse.Namespace) -> None:
                   else "never (some replicas)")
         test_str = (f"{chosen['mean_test_f1_at_chosen']:.4f}"
                     if chosen.get("mean_test_f1_at_chosen") is not None else "n/a")
-        teff_str = (f"{chosen['T_eff_s']:.1f}~s"
-                    if chosen.get("T_eff_s") is not None else "n/a")
+        score_str = (f"{chosen['score']:.3f}"
+                     if chosen.get("score") is not None else "n/a")
         time_str = (f"{chosen['mean_train_time_s']:.1f}~s"
                     if chosen.get("mean_train_time_s") is not None else "n/a")
+        nll_str = (f"{chosen['mean_val_nll']:.4f}"
+                   if chosen.get("mean_val_nll") is not None else "n/a")
         rate_str = (f"{chosen['switch_rate']*100:.0f}%"
                     if chosen.get("switch_rate") is not None else "n/a")
         report_lines += [
             "",
             f"=== signal = {signal} ===",
             f"chosen (ε, k): ε={chosen['epsilon']:g}, k={chosen['k']}",
-            f"  mean VAL F1 (selection metric) = {chosen['mean_val_f1']:.4f}  "
+            f"  mean VAL F1 (filter metric) = {chosen['mean_val_f1']:.4f}  "
             f"(top in grid = {chosen['best_val_f1_among_grid']:.4f}, "
             f"{chosen['n_tied_candidates']} candidates within "
             f"{chosen['tie_break_within_val_f1']*100:.1f}% of top)",
             f"  tie-break rule: {chosen['tie_break_rule']}",
-            f"  T_eff at chosen = {teff_str}  "
-            f"(mean training time = {time_str}; switch rate = {rate_str})",
+            f"  score at chosen = {score_str}  "
+            f"(mean training time = {time_str}; mean val NLL = {nll_str}; "
+            f"switch rate = {rate_str})",
             f"  mean test F1 at chosen (diagnostic only) = {test_str}",
             f"  mean switch round at chosen = {sw_str}",
             "",
-            "Full ε × k grid (mean VAL F1 ± std — used for selection):",
+            "Full ε × k grid (mean VAL F1 ± std — used for filter):",
             f"{'ε / k':>12} | " + " | ".join(f"{k:>14}" for k in k_vals),
             "-" * (14 + 4 * (len(k_vals) + 1)),
         ]

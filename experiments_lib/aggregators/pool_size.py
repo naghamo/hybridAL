@@ -3,7 +3,7 @@ import argparse
 import re
 from pathlib import Path
 
-from ..shared.tables import cell, welch_p, stars_for_p
+from ..shared.tables import cell, paired_p, stars_for_p
 from ._base import build_summary_and_per_round, write_default_csvs
 
 NAME = "pool_size_ablation"
@@ -50,14 +50,21 @@ def main(args):
             sw_str = f"{sum(sw)/len(sw):.1f}" if sw else "—"
             lines.append(f"  pool={p:>4} × {d}: {sw_str}")
 
-    lines.append("\nWelch t-test HybridAL vs Retrain (per pool × dataset):")
+    lines.append("\nPaired t-test HybridAL vs Retrain (per pool × dataset; "
+                 "paired by seed):")
     for p in pools:
         for d in datasets:
-            a = [r["test_f1"] for r in rows_summary
-                 if r["method"] == "HybridAL" and r["pool"] == p and r["data"] == d]
-            b = [r["test_f1"] for r in rows_summary
-                 if r["method"] == "Retrain" and r["pool"] == p and r["data"] == d]
-            pp = welch_p(a, b)
+            a_seeded = sorted(
+                (int(r["seed"]), float(r["test_f1"])) for r in rows_summary
+                if r["method"] == "HybridAL" and r["pool"] == p and r["data"] == d)
+            b_seeded = sorted(
+                (int(r["seed"]), float(r["test_f1"])) for r in rows_summary
+                if r["method"] == "Retrain" and r["pool"] == p and r["data"] == d)
+            common = sorted(set(s for s, _ in a_seeded)
+                            & set(s for s, _ in b_seeded))
+            a = [v for s, v in a_seeded if s in common]
+            b = [v for s, v in b_seeded if s in common]
+            pp = paired_p(a, b)
             if pp is not None:
                 lines.append(f"  pool={p:>4} × {d}: p={pp:.3f}{stars_for_p(pp)}")
 

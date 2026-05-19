@@ -10,7 +10,7 @@ import argparse
 from collections import defaultdict
 from pathlib import Path
 
-from ..shared.tables import cell, safe_mean, welch_p, stars_for_p
+from ..shared.tables import cell, safe_mean, paired_p, stars_for_p
 from ._base import build_summary_and_per_round, write_default_csvs
 
 NAME = "main_results"
@@ -97,11 +97,21 @@ def main(args: argparse.Namespace) -> None:
                 continue
             ps = []
             for d in datasets:
-                a = [r["test_f1"] for r in rows_summary
-                     if r["backbone"] == bb and r["method"] == "HybridAL" and r["data"] == d]
-                b = [r["test_f1"] for r in rows_summary
-                     if r["backbone"] == bb and r["method"] == m and r["data"] == d]
-                p = welch_p(a, b)
+                # Paired by seed: same seed used across methods on the same
+                # (backbone, dataset), so the design is matched.
+                a_seeded = sorted(
+                    (int(r["seed"]), float(r["test_f1"])) for r in rows_summary
+                    if r["backbone"] == bb and r["method"] == "HybridAL"
+                    and r["data"] == d)
+                b_seeded = sorted(
+                    (int(r["seed"]), float(r["test_f1"])) for r in rows_summary
+                    if r["backbone"] == bb and r["method"] == m
+                    and r["data"] == d)
+                common = sorted(
+                    set(s for s, _ in a_seeded) & set(s for s, _ in b_seeded))
+                a = [v for s, v in a_seeded if s in common]
+                b = [v for s, v in b_seeded if s in common]
+                p = paired_p(a, b)
                 ps.append(f"p={p:.3f}{stars_for_p(p)}" if p is not None else "—")
             lines.append(f"{('vs ' + m):<24} | " + " | ".join(f"{c:>20}" for c in ps))
 

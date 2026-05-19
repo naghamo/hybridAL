@@ -41,6 +41,7 @@ METHODS = [
     "FixedSwitch_5",
     "FixedSwitch_7",
     "FixedSwitch_10",
+    "FixedSwitch_12",
 ]
 
 
