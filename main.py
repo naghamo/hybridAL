@@ -70,6 +70,8 @@ EXPERIMENTS = [
      "Exp 8 — Normalization sensitivity (appendix)"),
     ("calibration_sensitivity","calibration_sensitivity","calibration_sensitivity",
      "Exp 9 — Calibration dataset sensitivity (appendix)"),
+    ("calibration_eval",       "calibration_eval",       None,
+     "Exp — Re-run main results on DistilBERT with logit saving (ECE / temp scaling)"),
 ]
 
 

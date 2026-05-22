@@ -84,7 +84,9 @@ training strategy to use*:
 │   │   ├── n_sensitivity.py      # entropy pre-filter N
 │   │   ├── early_stopping.py     # max-10 + ES vs fixed-5
 │   │   ├── calibration_sensitivity.py
-│   │   └── normalizer_sensitivity.py
+│   │   ├── normalizer_sensitivity.py
+│   │   └── calibration_eval.py   # re-run on DistilBERT, save logits for
+│   │                             # ECE / temperature-scaling analysis
 │   ├── aggregators/              # one module per experiment that builds _summary.csv
 │   │   ├── _base.py
 │   │   └── {main_results, hyperparameter, pool_size, batch_size,
@@ -176,6 +178,23 @@ python main.py run early_stopping   # max-10 + ES vs fixed-5
 
 Aggregate each with `python main.py aggregate <experiment>`.
 
+### Calibration analysis (ECE / temperature scaling)
+
+Re-runs the 5 main methods on DistilBERT (150 cells) and saves
+per-run test/val logits + labels as `.npy` sidecars next to each
+`results_*.json`, enabling offline ECE and post-temperature-scaling
+NLL (Guo et al. 2017) without retraining.
+
+```bash
+python main.py run calibration_eval \
+    --signal-alpha delta_spectral_alpha --epsilon-alpha 1e-4 --k-alpha 3 \
+    --signal-acc   delta_accuracy        --epsilon-acc   5e-3 --k-acc   2
+```
+
+Outputs per run: `test_logits.npy`, `test_labels.npy`,
+`val_logits.npy`, `val_labels.npy`. No aggregator; the
+post-processing script is not shipped.
+
 ### Signal ablation
 
 The signal ablation re-uses the main-results runner with one signal at a
@@ -198,9 +217,11 @@ writes `experiments/<experiment>/_summary.csv` with one row per
 test NLL, wall-clock training time, switch round, and per-round
 metrics. These CSVs back every numerical claim in the paper. The
 signal-ablation CSV omits test NLL; downstream analyses that need it
-read `final_test_stats.loss` from each run's `results_*.json`.
-Plotting and LaTeX-table scripts that consume them are not part of
-this code release.
+read `final_test_stats.loss` from each run's `results_*.json`. The
+`calibration_eval` runner has no aggregator and instead writes the
+four `.npy` sidecar arrays per run (see above) for offline
+temperature-scaling and ECE computation. Plotting and LaTeX-table
+scripts that consume these CSVs are not part of this code release.
 
 ---
 

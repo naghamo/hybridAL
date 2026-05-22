@@ -403,6 +403,7 @@ def _evaluate_model_core(
         include_advanced_metrics: bool = False,
         advanced_metric_subset_size: int = 512,
         update_advanced_metric_state: bool = True,
+        return_logits: bool = False,
 ) -> Dict[str, float]:
     """
     Core evaluation function that handles both full and subset evaluation.
@@ -435,6 +436,7 @@ def _evaluate_model_core(
     loader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=False)
     total_loss = 0.0
     all_preds, all_labels = [], []
+    all_logits = [] if return_logits else None
 
     model.eval()
     with torch.no_grad():
@@ -452,6 +454,8 @@ def _evaluate_model_core(
 
             all_preds.append(preds.cpu())
             all_labels.append(targets.cpu())
+            if return_logits:
+                all_logits.append(logits.detach().cpu())
 
     all_preds = torch.cat(all_preds).numpy()
     all_labels = torch.cat(all_labels).numpy()
@@ -461,6 +465,9 @@ def _evaluate_model_core(
         "f1_score": f1_score(all_labels, all_preds, average="macro"),
         "accuracy": accuracy_score(all_labels, all_preds)
     }
+    if return_logits:
+        metrics["_logits"] = torch.cat(all_logits).numpy()
+        metrics["_labels"] = all_labels
 
     if include_advanced_metrics:
         metrics.update(
@@ -500,6 +507,7 @@ def evaluate_model(
         include_advanced_metrics: bool = False,
         advanced_metric_subset_size: int = 512,
         update_advanced_metric_state: bool = True,
+        return_logits: bool = False,
 ) -> Dict[str, float]:
     """
     Evaluate a PyTorch model on a given dataset.
@@ -537,6 +545,7 @@ def evaluate_model(
         include_advanced_metrics=include_advanced_metrics,
         advanced_metric_subset_size=advanced_metric_subset_size,
         update_advanced_metric_state=update_advanced_metric_state,
+        return_logits=return_logits,
     )
 
 

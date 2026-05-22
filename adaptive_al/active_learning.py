@@ -203,6 +203,11 @@ class ActiveLearning:
         """
         self.round_stats: List[Dict] = []
         self.final_test_stats: Dict = {}
+        
+        self.final_val_logits = None
+        self.final_val_labels = None
+        self.final_test_logits = None
+        self.final_test_labels = None
 
         self.current_round = 0
 
@@ -292,8 +297,13 @@ class ActiveLearning:
             dataset=self.val_dataset,
             device=self.cfg.device,
             include_advanced_metrics=True,
+            return_logits=True,
         )
 
+        # Capture logits + labels from the last-round val eval so a
+        # temperature parameter can be fit downstream.
+        self.final_val_logits = val_stats.pop("_logits", None)
+        self.final_val_labels = val_stats.pop("_labels", None)
 
         self._update_last_stats(val_stats)
 
@@ -660,7 +670,10 @@ class ActiveLearning:
             dataset=self.test_dataset,
             device=self.cfg.device,
             include_advanced_metrics=True,
+            return_logits=True,
         )
+        self.final_test_logits = metrics.pop("_logits", None)
+        self.final_test_labels = metrics.pop("_labels", None)
         self.final_test_stats = metrics
         self.confusion_matrix = compute_confusion_matrix(self.model, self.test_dataset, self.cfg.batch_size)
         tqdm.write(
@@ -768,7 +781,9 @@ class ActiveLearning:
         return timed_out
 
     def save_experiment(self, filepath: Optional[Path] = None, timestamp: bool = True) -> None:
-        """Save experiment results to a JSON file."""
+        """Save experiment results to a JSON file, plus any captured
+        final-round logits/labels as .npy sidecars for downstream
+        calibration analyses (ECE, post-temperature-scaling NLL)."""
         summary = self.get_experiment_summary()
 
 
@@ -784,6 +799,19 @@ class ActiveLearning:
 
         with open(filepath, 'w') as f:
             json.dump(summary, f, indent=2, default=str)
+
+        # Save logits + labels as sidecar .npy files (no version suffix
+        # — overwritten each run is fine since only the latest matters
+        # for downstream calibration scripts).
+        import numpy as np
+        for arr_name, arr in [
+            ("test_logits", self.final_test_logits),
+            ("test_labels", self.final_test_labels),
+            ("val_logits", self.final_val_logits),
+            ("val_labels", self.final_val_labels),
+        ]:
+            if arr is not None:
+                np.save(save_dir / f"{arr_name}.npy", arr)
 
         logging.info(f"Experiment saved to {filepath}")
 
