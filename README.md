@@ -220,8 +220,7 @@ signal-ablation CSV omits test NLL; downstream analyses that need it
 read `final_test_stats.loss` from each run's `results_*.json`. The
 `calibration_eval` runner has no aggregator and instead writes the
 four `.npy` sidecar arrays per run (see above) for offline
-temperature-scaling and ECE computation. Plotting and LaTeX-table
-scripts that consume these CSVs are not part of this code release.
+temperature-scaling and ECE computation.
 
 ---
 
