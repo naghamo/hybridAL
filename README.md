@@ -1,8 +1,11 @@
 # HybridAL: Switching Signal-Guided Training in Active Learning
 
-Anonymous code release accompanying the EMNLP 2026 submission
-*"Train Smarter, Not Harder: Switching Signal-Guided Training in Active Learning"*.
+Code for the EMNLP 2026 paper
+**Train Smarter, Not Harder: Switching Signal-Guided Training in Active Learning**
 
+Nagham Omar\*, Maya Rozenshtein\*, Evgeny Mishlyakov\*, Avigdor Gal
+Faculty of Data and Decision Sciences, Technion
+\*Equal contribution
 ---
 
 ## Overview
@@ -22,11 +25,11 @@ complementary signals:
 
 Across **3 transformer backbones** (DistilBERT, BERT, RoBERTa) and
 **6 text-classification benchmarks** (IMDb, Jigsaw, SST-2, TweetEval,
-AG News, Yahoo Answers) with **5 seeds** each, HybridAL preserves
-test F1 (no statistically significant difference from retraining or
-fine-tuning in the majority of cells, paired *t*-test, *p* > 0.05),
-saves up to **49 %** of retraining time, and outperforms every
-pre-committed `FixedSwitch@k` schedule on calibration.
+AG News, Yahoo Answers) with **5 seeds** each, HybridAL keeps endpoint test F1 non-inferior to retraining and fine-tuning
+at a 0.010 margin (TOST), saves up to **49 %** of retraining time, and
+obtains a stronger time–calibration trade-off than every pre-committed
+`FixedSwitch@k` schedule.,
+
 
 ---
 
@@ -117,8 +120,8 @@ tracked); the aggregators read those and write per-experiment
 Tested on Linux with Python 3.11 and CUDA 11.8.
 
 ```bash
-git clone <anonymous repo URL>
-cd hybridal
+git clone https://github.com/naghamo/hybridAL
+cd hybridAL
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -268,7 +271,20 @@ Defaults used across every experiment unless stated otherwise:
 
 ---
 
-## License
+## Citation
 
-Released for academic use under the terms of the EMNLP 2026 submission
-process. Authors and affiliation withheld for double-blind review.
+If you use this code, please cite:
+
+```bibtex
+@inproceedings{omar2026train,
+  title     = {Train Smarter, Not Harder: Switching Signal-Guided
+               Training in Active Learning},
+  author    = {Omar, Nagham and Rozenshtein, Maya and
+               Mishlyakov, Evgeny and Gal, Avigdor},
+  booktitle = {Proceedings of the 2026 Conference on Empirical Methods
+               in Natural Language Processing},
+  year      = {2026}
+}
+```
+
+
